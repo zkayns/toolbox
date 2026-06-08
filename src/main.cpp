@@ -1,5 +1,6 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/GameManager.hpp>
+#include <Geode/modify/GameObject.hpp>
 #include <Geode/binding/GJBaseGameLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
@@ -23,6 +24,8 @@ struct Toolbox {
     };
     std::string currentFunny;
     bool noclip;
+    bool noCollide;
+    bool noObjectGlow;
     bool noRespawnFlash;
     bool noWaveTrail;
     bool iconHack;
@@ -34,6 +37,8 @@ struct Toolbox {
         fontScale=getMod()->getSavedValue<float>("fontScale", 1.0f);
         iconHack=getMod()->getSavedValue<bool>("iconHack", false);
         noclip=getMod()->getSavedValue<bool>("noclip", false);
+        noCollide=getMod()->getSavedValue<bool>("noCollide", false);
+        noObjectGlow=getMod()->getSavedValue<bool>("noObjectGlow", false);
         noRespawnFlash=getMod()->getSavedValue<bool>("noRespawnFlash", false);
         noWaveTrail=getMod()->getSavedValue<bool>("noWaveTrail", false);
         waveTrailSize=getMod()->getSavedValue<float>("waveTrailSize", 1.0f);
@@ -42,6 +47,8 @@ struct Toolbox {
         getMod()->setSavedValue<float>("fontScale", fontScale);
         getMod()->setSavedValue<bool>("iconHack", iconHack);
         getMod()->setSavedValue<bool>("noclip", noclip);
+        getMod()->setSavedValue<bool>("noCollide", noCollide);
+        getMod()->setSavedValue<bool>("noObjectGlow", noObjectGlow);
         getMod()->setSavedValue<bool>("noRespawnFlash", noRespawnFlash);
         getMod()->setSavedValue<bool>("noWaveTrail", noWaveTrail);
         getMod()->setSavedValue<float>("waveTrailSize", waveTrailSize);
@@ -65,6 +72,10 @@ $on_mod(Loaded) {
             ImGui::SetItemTooltip("Bypasses icon & color unlock requirements.");
             ImGui::Checkbox("Noclip", &toolbox.noclip);
             ImGui::SetItemTooltip("Prevents the player from dying.");
+            ImGui::Checkbox("No Collide", &toolbox.noCollide);
+            ImGui::SetItemTooltip("Disables object collision entirely.");
+            ImGui::Checkbox("No Object Glow", &toolbox.noObjectGlow);
+            ImGui::SetItemTooltip("Disables object glow.");
             ImGui::Checkbox("No Respawn Flash", &toolbox.noRespawnFlash);
             ImGui::SetItemTooltip("Disables the flash effect upon respawn.");
             ImGui::Checkbox("No Wave Trail", &toolbox.noWaveTrail);
@@ -79,6 +90,16 @@ $on_mod(Loaded) {
         };
         toolbox.save();
     });
+};
+class $modify(GameObject) {
+    void addGlow(gd::string frame) {
+        if (!toolbox.noObjectGlow) GameObject::addGlow(frame);
+    };
+    CCRect getObjectRect(float width, float height) {
+        CCRect ret=GameObject::getObjectRect(width, height);
+        if (toolbox.noCollide) ret.size.setSize(0, 0);
+        return ret;
+    };
 };
 class $modify(PlayerObject) {
 	virtual void update(float dt) {
