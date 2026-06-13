@@ -1,9 +1,7 @@
 #include <Geode/Geode.hpp>
-#include <Geode/modify/GJScoreCell.hpp>
-#include <Geode/modify/CurrencyRewardLayer.hpp>
 #include <Geode/modify/GameManager.hpp>
 #include <Geode/modify/GameObject.hpp>
-#include <Geode/binding/GJBaseGameLayer.hpp>
+#include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
 #include <imgui-cocos.hpp>
@@ -27,8 +25,9 @@ struct Toolbox {
         "We sell relatable gold here sir"
     };
     std::string currentFunny;
+    bool autoKill;
+    float autoKillPercentage;
     bool customWaveTrail;
-    bool incognito;
     bool noclip;
     bool noCollide;
     bool noObjectGlow;
@@ -47,10 +46,11 @@ struct Toolbox {
     Mod* getMod() { return Mod::get(); };
     FMODAudioEngine* getAudioEngine() { return FMODAudioEngine::get(); };
     void load() {
+        autoKill=getMod()->getSavedValue<bool>("autoKill", false);
+        autoKillPercentage=getMod()->getSavedValue<float>("autoKillPercentage", 50.0f);
         customWaveTrail=getMod()->getSavedValue<bool>("customWaveTrail", false);
         fontScale=getMod()->getSavedValue<float>("fontScale", 1.0f);
         iconHack=getMod()->getSavedValue<bool>("iconHack", false);
-        incognito=getMod()->getSavedValue<bool>("incognito", false);
         noclip=getMod()->getSavedValue<bool>("noclip", false);
         noCollide=getMod()->getSavedValue<bool>("noCollide", false);
         noObjectGlow=getMod()->getSavedValue<bool>("noObjectGlow", false);
@@ -59,10 +59,11 @@ struct Toolbox {
         waveTrailSize=getMod()->getSavedValue<float>("waveTrailSize", 1.0f);
     };
     void save() {
+        getMod()->setSavedValue<bool>("autoKill", autoKill);
+        getMod()->setSavedValue<float>("autoKillPercentage", autoKillPercentage);
         getMod()->setSavedValue<bool>("customWaveTrail", customWaveTrail);
         getMod()->setSavedValue<float>("fontScale", fontScale);
         getMod()->setSavedValue<bool>("iconHack", iconHack);
-        getMod()->setSavedValue<bool>("incognito", incognito);
         getMod()->setSavedValue<bool>("noclip", noclip);
         getMod()->setSavedValue<bool>("noCollide", noCollide);
         getMod()->setSavedValue<bool>("noObjectGlow", noObjectGlow);
@@ -94,11 +95,16 @@ $on_mod(Loaded) {
                 ImGui::SetItemTooltip("Equivalent to GD's music volume slider.");
                 ImGui::SliderFloat("SFX Volume", &toolbox.getAudioEngine()->m_sfxVolume, 0.0f, 1.0f, "%.2f");
                 ImGui::SetItemTooltip("Equivalent to GD's SFX volume slider.");
-                ImGui::Checkbox("Incognito", &toolbox.incognito);
-                ImGui::SetItemTooltip("Hides information that could potentially be used to identify the current account.");
                 ImGui::TreePop();
             };
             if (ImGui::TreeNode("Player")) {
+                if (ImGui::TreeNode("Auto Kill")) {
+                    ImGui::Checkbox("Enabled", &toolbox.autoKill);
+                    ImGui::SetItemTooltip("Enables Auto Kill.");
+                    ImGui::SliderFloat("Percentage", &toolbox.autoKillPercentage, 0.0f, 100.0f);
+                    ImGui::SetItemTooltip("Percentage at which to automatically kill the player.");
+                    ImGui::TreePop();
+                };
                 if (ImGui::TreeNode("Custom Wave Trail")) {
                     ImGui::Checkbox("Enabled", &toolbox.customWaveTrail);
                     ImGui::SetItemTooltip("Enables Custom Wave Trail.");
@@ -140,18 +146,6 @@ $on_mod(Loaded) {
         toolbox.save();
     });
 };
-class $modify(GJScoreCell) {
-    void update(float delta) {
-        GJScoreCell::update(delta);
-        if (toolbox.incognito) this->m_backgroundLayer->setVisible(false);
-    };
-};
-class $modify(CurrencyRewardLayer) {
-    void update(float dt) {
-        CurrencyRewardLayer::update(dt);
-        if (toolbox.incognito) this->m_mainNode->setVisible(false);
-    };
-};
 class $modify(GameObject) {
     void addGlow(gd::string frame) {
         if (!toolbox.noObjectGlow) GameObject::addGlow(frame);
@@ -163,7 +157,7 @@ class $modify(GameObject) {
     };
 };
 class $modify(PlayerObject) {
-	virtual void update(float dt) {
+	void update(float dt) {
 		this->update(dt);
         if (toolbox.customWaveTrail) {
 		    if (toolbox.noWaveTrail) this->m_waveTrail->reset();
@@ -182,6 +176,12 @@ class $modify(GameManager) {
     bool isColorUnlocked(int id, UnlockType type) {
         if (toolbox.iconHack) return true;
         return GameManager::isColorUnlocked(id, type);
+    };
+};
+class $modify(GJBaseGameLayer) {
+    void update(float dt) {
+        if (toolbox.autoKill&&!this->m_level->isPlatformer()&&PlayLayer::get()->getCurrentPercent()>=toolbox.autoKillPercentage) PlayLayer::get()->resetLevelFromStart();
+        GJBaseGameLayer::update(dt);
     };
 };
 class $modify(PlayLayer) {
