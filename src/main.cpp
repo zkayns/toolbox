@@ -5,7 +5,7 @@
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
 #include <imgui-cocos.hpp>
-#include "SavedIconsEntry.cpp";
+#include "SavedIconsEntry.cpp"
 using namespace geode::prelude;
 struct Toolbox {
     bool styleEditor=false;
