@@ -1,4 +1,5 @@
 #include <Geode/Geode.hpp>
+#include <Geode/modify/LevelInfoLayer.hpp>
 #include <Geode/modify/GameManager.hpp>
 #include <Geode/modify/GameObject.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
@@ -36,12 +37,25 @@ struct Toolbox {
     bool iconHack;
     float fontScale;
     float waveTrailSize;
+    GJGameLevel* lastLevel=nullptr;
     char iconSaveName[64]="icons";
+    std::string realPassword(geode::SeedValueRS password) {
+        if (password.value()==0) return "Not Copyable";
+        if (password.value()==1) return "Free Copy";
+        return std::to_string(password.value()).substr(1);
+    };
+    bool iconKitExists(std::string fileName) {
+        return std::filesystem::exists(iconSavePath(fileName));
+    };
+    std::filesystem::path iconSavePath(std::string fileName) {
+        return getMod()->getSaveDir()/"iconKits"/fileName;
+    };
     void loadIcons() {
-        geode::utils::file::readFromJson<SavedIconsEntry>(getMod()->getSaveDir()/"iconKits"/iconSaveName).ok()->load();
+        if (!iconKitExists(iconSaveName)) return;
+        geode::utils::file::readFromJson<SavedIconsEntry>(iconSavePath(iconSaveName)).ok()->load();
     };
     void saveIcons() {
-        geode::utils::file::writeToJson<SavedIconsEntry>(getMod()->getSaveDir()/"iconKits"/iconSaveName, SavedIconsEntry::fromCurrent());
+        geode::utils::file::writeToJson<SavedIconsEntry>(iconSavePath(iconSaveName), SavedIconsEntry::fromCurrent());
     };
     Mod* getMod() { return Mod::get(); };
     FMODAudioEngine* getAudioEngine() { return FMODAudioEngine::get(); };
@@ -133,6 +147,20 @@ $on_mod(Loaded) {
                 ImGui::TreePop();
             };
             if (ImGui::TreeNode("Level")) {
+                if (ImGui::TreeNode("Level Info")) {
+                    if (toolbox.lastLevel==nullptr) ImGui::Text("No level loaded");
+                    else {
+                        ImGui::Text("ID: %s", std::to_string((*toolbox.lastLevel).m_levelID.value()).c_str());
+                        ImGui::Text("Name: %s", (*toolbox.lastLevel).m_levelName.c_str());
+                        ImGui::Text("Creator: %s", (*toolbox.lastLevel).m_creatorName.c_str());
+                        ImGui::Text("Objects: %s", std::to_string((*toolbox.lastLevel).m_objectCount.value()).c_str());
+                        ImGui::Text("Version: %s", std::to_string((*toolbox.lastLevel).m_levelVersion).c_str());
+                        ImGui::Text("Password: %s", toolbox.realPassword((*toolbox.lastLevel).m_password).c_str());
+                        ImGui::Text("Attempts: %s", std::to_string((*toolbox.lastLevel).m_attempts.value()).c_str());
+                        ImGui::Text("Jumps: %s", std::to_string((*toolbox.lastLevel).m_jumps.value()).c_str());
+                    };
+                    ImGui::TreePop();
+                };
                 ImGui::Checkbox("No Collide", &toolbox.noCollide);
                 ImGui::SetItemTooltip("Disables object collision entirely.");
                 ImGui::Checkbox("No Object Glow", &toolbox.noObjectGlow);
@@ -145,6 +173,12 @@ $on_mod(Loaded) {
         };
         toolbox.save();
     });
+};
+class $modify(LevelInfoLayer) {
+    bool init(GJGameLevel* level, bool challenge) {
+        toolbox.lastLevel=level;
+        return LevelInfoLayer::init(level, challenge);
+    };
 };
 class $modify(GameObject) {
     void addGlow(gd::string frame) {
@@ -180,6 +214,7 @@ class $modify(GameManager) {
 };
 class $modify(GJBaseGameLayer) {
     void update(float dt) {
+        toolbox.lastLevel=this->m_level;
         if (toolbox.autoKill&&!this->m_level->isPlatformer()&&PlayLayer::get()->getCurrentPercent()>=toolbox.autoKillPercentage) PlayLayer::get()->resetLevelFromStart();
         GJBaseGameLayer::update(dt);
     };
