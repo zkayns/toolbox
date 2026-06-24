@@ -5,9 +5,101 @@
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
+#include <Geode/modify/CheckpointObject.hpp>
 #include <imgui-cocos.hpp>
 #include "SavedIconsEntry.cpp"
 using namespace geode::prelude;
+struct RogueInput {
+    bool player;
+    bool press;
+    PlayerButton button;
+    uint64_t tick;
+};
+struct RogueMacro {
+    char name[128]="";
+    double tps=240;
+    int seed=0;
+    bool platformer=false;
+    bool ldm=false;
+    std::vector<RogueInput> inputs;
+};
+struct Rogue {
+    RogueMacro macro;
+    int state=0;
+    uint64_t tick;
+};
+Rogue rogue;
+class $modify(PlayerObject) {
+    bool pushButton(PlayerButton button) {
+        if (rogue.state==1) {
+            rogue.macro.inputs.push_back(RogueInput{
+                .player=this->isPlayer2(),
+                .press=true,
+                .button=button,
+                .tick=rogue.tick
+            });
+        };
+        return PlayerObject::pushButton(button);
+    };
+    bool releaseButton(PlayerButton button) {
+        if (rogue.state==1) {
+            rogue.macro.inputs.push_back(RogueInput{
+                .player=this->isPlayer2(),
+                .press=false,
+                .button=button,
+                .tick=rogue.tick
+            });
+        };
+        return PlayerObject::releaseButton(button);
+    };
+    void update(float dt) {
+        if (isPlayer1()) {
+            if (rogue.state==2) {
+                for (const auto& input:rogue.macro.inputs) {
+                    if (input.tick==rogue.tick) {
+                        if (input.player) {
+                            if (input.press) GJBaseGameLayer::get()->m_player2->pushButton(input.button);
+                            else GJBaseGameLayer::get()->m_player2->releaseButton(input.button);
+                        } else {
+                            if (input.press) GJBaseGameLayer::get()->m_player1->pushButton(input.button);
+                            else GJBaseGameLayer::get()->m_player1->releaseButton(input.button);
+                        };
+                    };
+                };
+            } else if (rogue.state==1) std::erase_if(rogue.macro.inputs, [](RogueInput input){
+                return input.tick>rogue.tick;
+            });
+            if (rogue.state==1) rogue.macro.seed=GJBaseGameLayer::get()->m_randomSeed;
+        };
+        PlayerObject::update(dt);
+        if (isPlayer1()) rogue.tick++;
+    };
+};
+class $modify(RogueCheckpoint, CheckpointObject) {
+    struct Fields {
+        uint64_t m_tick=0;
+    };
+    bool init() {
+        if (rogue.tick==0&&rogue.state==1) return false; // geek ass fix
+        bool r=CheckpointObject::init();
+        m_fields->m_tick=rogue.tick-1;
+        return r;
+    };
+};
+class $modify(PlayLayer) {
+    void startGame() {
+        rogue.tick=0;  
+        PlayLayer::startGame();
+    };
+    void resetLevel() {
+        rogue.tick=0;
+        PlayLayer::resetLevel();
+    };
+    void loadFromCheckpoint(CheckpointObject* object) {
+        rogue.tick=static_cast<RogueCheckpoint*>(object)->m_fields->m_tick;  
+        PlayLayer::loadFromCheckpoint(object);
+    };
+};
 struct Toolbox {
     bool styleEditor=false;
     bool uiOpen=false;
@@ -167,6 +259,21 @@ $on_mod(Loaded) {
                 ImGui::SetItemTooltip("Disables object glow.");
                 if (ImGui::Button("Clear Shaders")) GJBaseGameLayer::get()->m_shaderLayer->resetAllShaders();
                 ImGui::SetItemTooltip("Clears all currently running shaders.");
+                ImGui::TreePop();
+            };
+            if (ImGui::TreeNode("Rogue")) {
+                ImGui::InputText("Macro Name", rogue.macro.name, IM_ARRAYSIZE(rogue.macro.name));
+                ImGui::InputDouble("Macro TPS", &rogue.macro.tps);
+                ImGui::Text("Bot State");
+                ImGui::SameLine();
+                ImGui::RadioButton("Off", &rogue.state, 0);
+                ImGui::SameLine();
+                ImGui::RadioButton("Record", &rogue.state, 1);
+                ImGui::SameLine();
+                ImGui::RadioButton("Play", &rogue.state, 2);
+                if (ImGui::Button("Clear")) rogue.macro.inputs.clear();
+                ImGui::Text("tick %s", std::to_string(rogue.tick).c_str());
+                ImGui::Text("inputs %s", std::to_string(rogue.macro.inputs.size()).c_str());
                 ImGui::TreePop();
             };
             ImGui::End();
