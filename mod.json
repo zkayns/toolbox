@@ -6,8 +6,8 @@
 	},
 	"id": "zkayns.toolbox",
 	"name": "Toolbox",
-	"version": "v1.0.3",
-	"developer": "zkayns",
+	"version": "v1.0.5",
+	"developer": "ZProject",
 	"description": "",
 	"dependencies": {
 		"geode.node-ids": ">=v1.23.3"
