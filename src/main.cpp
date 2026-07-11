@@ -1,3 +1,5 @@
+// .RGB = RoGue Bot
+// .TBG = ToolBox Garage
 #include <Geode/Geode.hpp>
 #include <Geode/utils/cocos.hpp>
 #include <Geode/modify/LevelInfoLayer.hpp>
@@ -8,6 +10,7 @@
 #include <Geode/modify/PlayerObject.hpp>
 #include <Geode/modify/CCScheduler.hpp>
 #include <Geode/modify/EditorUI.hpp>
+#include <Geode/modify/UILayer.hpp>
 #include <imgui-cocos.hpp>
 using namespace geode::prelude;
 struct SavedIconsEntry {
@@ -29,22 +32,22 @@ struct SavedIconsEntry {
     int death;
     static SavedIconsEntry fromCurrent() {
         return SavedIconsEntry{
-            .cube=GameManager::get()->m_playerFrame.value(),
-            .ship=GameManager::get()->m_playerShip.value(),
-            .jetpack=GameManager::get()->m_playerJetpack.value(),
-            .ball=GameManager::get()->m_playerBall.value(),
-            .ufo=GameManager::get()->m_playerBird.value(),
-            .wave=GameManager::get()->m_playerDart.value(),
-            .robot=GameManager::get()->m_playerRobot.value(),
-            .spider=GameManager::get()->m_playerSpider.value(),
-            .swing=GameManager::get()->m_playerSwing.value(),
-            .color1=GameManager::get()->m_playerColor.value(),
-            .color2=GameManager::get()->m_playerColor2.value(),
-            .colorGlow=GameManager::get()->m_playerGlowColor.value(),
-            .glowEnabled=GameManager::get()->m_playerGlow,
-            .streak=GameManager::get()->m_playerStreak.value(),
-            .fire=GameManager::get()->m_playerShipFire.value(),
-            .death=GameManager::get()->m_playerDeathEffect.value(),
+            .cube=GameManager::get()->getPlayerFrame(),
+            .ship=GameManager::get()->getPlayerShip(),
+            .jetpack=GameManager::get()->getPlayerJetpack(),
+            .ball=GameManager::get()->getPlayerBall(),
+            .ufo=GameManager::get()->getPlayerBird(),
+            .wave=GameManager::get()->getPlayerDart(),
+            .robot=GameManager::get()->getPlayerRobot(),
+            .spider=GameManager::get()->getPlayerSpider(),
+            .swing=GameManager::get()->getPlayerSwing(),
+            .color1=GameManager::get()->getPlayerColor(),
+            .color2=GameManager::get()->getPlayerColor2(),
+            .colorGlow=GameManager::get()->getPlayerGlowColor(),
+            .glowEnabled=GameManager::get()->getPlayerGlow(),
+            .streak=GameManager::get()->getPlayerStreak(),
+            .fire=GameManager::get()->getPlayerShipFire(),
+            .death=GameManager::get()->getPlayerDeathEffect(),
         };
     };
     void load() {
@@ -121,44 +124,82 @@ struct matjson::Serialize<SavedIconsEntry> {
         return obj;
     };
 };
+// BEGIN ROGUE
 struct RogueInput {
     bool player;
     bool press;
-    uint64_t tick;
     PlayerButton button;
+    uint64_t tick;
     bool remove;
+    static RogueInput fromString(std::string str) {
+        if (str.size()<3) return RogueInput{};
+        RogueInput ret;
+        if (str[0]=='0') ret.button=PlayerButton::Jump;
+        else if (str[0]=='1') ret.button=PlayerButton::Left;
+        else if (str[0]=='2') ret.button=PlayerButton::Right;
+        ret.press=(str[1]=='1');
+        ret.player=(str[2]=='1');
+        ret.tick=std::stoull(str.substr(3));
+        return ret;
+    };
+    std::string toString() {
+        std::string ret;
+        if (button==PlayerButton::Jump) ret+="0";
+        else if (button==PlayerButton::Left) ret+="1";
+        else if (button==PlayerButton::Right) ret+="2";
+        ret+=std::to_string(press);
+        ret+=std::to_string(player);
+        ret+=std::to_string(tick);
+        return ret;
+    };
 };
 struct RogueMacro {
     char name[128]="";
     double tps=240;
     int seed=0;
     std::vector<RogueInput> inputs;
+    void cleanInputs() {
+        std::erase_if(inputs, [](RogueInput input){
+            if (input.tick>GJBaseGameLayer::get()->m_gameState.m_currentProgress/2) return true;
+            if (!GJBaseGameLayer::get()->m_isPlatformer&&input.button!=PlayerButton::Jump) return true;
+            return input.remove;
+        });
+    };
+    std::string toString() {
+        std::string ret=std::to_string(tps)+"|"+std::to_string(seed);
+        for (RogueInput input:inputs) ret+="|"+input.toString();
+        return ret;
+    };
 };
 struct Rogue {
     RogueMacro macro;
     int state=0;
     uint64_t lastPress;
     uint64_t lastRelease;
-    bool p1j;
-    bool p2j;
-    void save() {}; // UNI
-    void load() {}; // UNI
-    void cleanInputs() {
-        bool lp1=false;
-        bool lp2=false;
-        bool p1=false;
-        bool p2=false;
-        for (auto& input:macro.inputs) {
-            lp1=p1;
-            lp2=p2;
-            if (!input.player) p1=input.press;
-            else p2=input.press;
-            if (lp1==p1&&lp2==p2) input.remove=true;
-        };
+    std::filesystem::path macroSavePath(std::string fileName) { return Mod::get()->getSaveDir()/"rogue"/"macros"/(fileName+".rgb"); };
+    void save() { geode::utils::file::writeString(macroSavePath(std::string(macro.name)), macro.toString()); };
+    void load() {
+        char macroName[128];
+        strcpy(macroName, macro.name);
+        auto result=geode::utils::file::readString(macroSavePath(std::string(macroName))).ok();
+        macro=RogueMacro{};
+        strcpy(macro.name, macroName);
+        if (!result.has_value()) return;
+        auto split=geode::utils::string::splitView(result.value(), "|");
+        if (split.size()<3) return;
+        macro.tps=std::stod(std::string(split[0]));
+        macro.seed=std::stoi(std::string(split[1]));
+        std::vector<std::string_view> inputStrings(split.begin()+2, split.end());
+        for (const auto& s:inputStrings) macro.inputs.push_back(RogueInput::fromString(std::string(s)));
     };
 };
 Rogue rogue;
 class $modify(PlayerObject) {
+    void loadFromCheckpoint(PlayerCheckpoint* object) {
+        PlayerObject::loadFromCheckpoint(object);
+        PlayerObject::releaseAllButtons();
+        if (rogue.state==1) rogue.macro.cleanInputs();
+    };
     void update(float dt) {
         if (!isPlayer1()) {
             PlayerObject::update(dt);
@@ -178,12 +219,7 @@ class $modify(PlayerObject) {
             };
         } else if (rogue.state==1) {
             rogue.macro.seed=GJBaseGameLayer::get()->m_randomSeed;
-            std::erase_if(rogue.macro.inputs, [](RogueInput input){
-                if (input.tick>GJBaseGameLayer::get()->m_gameState.m_currentProgress/2) return true;
-                if (!GJBaseGameLayer::get()->m_isPlatformer&&input.button!=PlayerButton::Jump) return true;
-                return input.remove;
-            });
-            rogue.cleanInputs();
+            rogue.macro.cleanInputs();
         };
         PlayerObject::update(dt);
     };
@@ -215,11 +251,12 @@ class $modify(PlayerObject) {
     };
 };
 class $modify(PlayLayer) {
-    void loadFromCheckpoint(CheckpointObject* object) {
-        PlayLayer::loadFromCheckpoint(object);
-        if (rogue.state==1) rogue.cleanInputs();
+    void resetLevel() {
+        PlayLayer::resetLevel();
+        if (rogue.state==1) rogue.macro.cleanInputs();      
     };
 };
+// END ROGUE
 struct Toolbox {
     bool styleEditor=false;
     bool uiOpen=false;
@@ -253,7 +290,24 @@ struct Toolbox {
     bool noWaveTrail;
     bool iconHack;
     float fontScale;
+    bool noCheckpointDelay;
     float waveTrailSize;
+    cocos2d::ccColor3B waveTrailColor;
+    float waveTrailColorPicker[3];
+    bool useWaveTrailColor;
+    bool oneTimeCheatThisAttempt;
+    double realTpsBypass;
+    double tpsBypass;
+    bool tpsBypassEnabled;
+    bool isCheating() {
+        return (
+            noclip||
+            noCollide||
+            speedhackEnabled||
+            rogue.state==2||
+            oneTimeCheatThisAttempt
+        );
+    };
     GJGameLevel* lastLevel=nullptr;
     char iconSaveName[64]="icons";
     std::string realPassword(geode::SeedValueRS password) {
@@ -261,12 +315,14 @@ struct Toolbox {
         if (password.value()==1) return "Free Copy";
         return std::to_string(password.value()).substr(1);
     };
+    void switchGamemodeFromMenu(PlayerObject* player, int mode) {
+        oneTimeCheatThisAttempt=true;
+        switchGamemode(player, mode);
+    };
     bool iconKitExists(std::string fileName) {
         return std::filesystem::exists(iconSavePath(fileName));
     };
-    std::filesystem::path iconSavePath(std::string fileName) {
-        return getMod()->getSaveDir()/"iconKits"/fileName;
-    };
+    std::filesystem::path iconSavePath(std::string fileName) { return getMod()->getSaveDir()/"iconKits"/(fileName+".tbg"); };
     int getGamemode(PlayerObject* player) {
         if (player->m_isShip) return 1;
         if (player->m_isBall) return 2;
@@ -296,6 +352,7 @@ struct Toolbox {
     void saveIcons() {
         geode::utils::file::writeToJson<SavedIconsEntry>(iconSavePath(iconSaveName), SavedIconsEntry::fromCurrent());
     };
+    GLubyte toGLubyte(float f) { return static_cast<GLubyte>(std::clamp<float>(std::round(f*255.f), 0.f, 255.f)); };
     Mod* getMod() { return Mod::get(); };
     FMODAudioEngine* getAudioEngine() { return FMODAudioEngine::get(); };
     void load() {
@@ -313,6 +370,14 @@ struct Toolbox {
         speedhack=getMod()->getSavedValue<float>("speedhack", 1.f);
         speedhackEnabled=getMod()->getSavedValue<bool>("speedhackEnabled", false);
         individualRotate=getMod()->getSavedValue<bool>("individualRotate", false);
+        waveTrailColor=getMod()->getSavedValue<cocos2d::ccColor3B>("waveTrailColor", cocos2d::ccColor3B{255, 0, 0});
+        waveTrailColorPicker[0]=static_cast<float>(waveTrailColor.r)/255.f;
+        waveTrailColorPicker[1]=static_cast<float>(waveTrailColor.g)/255.f;
+        waveTrailColorPicker[2]=static_cast<float>(waveTrailColor.b)/255.f;
+        useWaveTrailColor=getMod()->getSavedValue<bool>("useWaveTrailColor", false);
+        noCheckpointDelay=getMod()->getSavedValue<bool>("noCheckpointDelay", false);
+        tpsBypass=getMod()->getSavedValue<double>("tpsBypass", 240.0);
+        tpsBypassEnabled=getMod()->getSavedValue<bool>("tpsBypassEnabled", false);
     };
     void save() {
         getMod()->setSavedValue<bool>("autoKill", autoKill);
@@ -329,11 +394,17 @@ struct Toolbox {
         getMod()->setSavedValue<float>("speedhack", speedhack);
         getMod()->setSavedValue<float>("speedhackEnabled", speedhackEnabled);
         getMod()->setSavedValue<bool>("individualRotate", individualRotate);
+        getMod()->setSavedValue<cocos2d::ccColor3B>("waveTrailColor", waveTrailColor);
+        getMod()->setSavedValue<bool>("useWaveTrailColor", useWaveTrailColor);
+        getMod()->setSavedValue<bool>("noCheckpointDelay", noCheckpointDelay);
+        getMod()->setSavedValue<double>("tpsBypass", tpsBypass);
+        getMod()->setSavedValue<bool>("tpsBypassEnabled", tpsBypassEnabled);
     };
-    std::vector<GameObject*> editorObjectVec(cocos2d::CCArray* source) {
+    std::vector<GameObject*> objectVec(cocos2d::CCArray* source) {
         auto ext=CCArrayExt<GameObject*>(source);
         return std::vector<GameObject*>(ext.begin(), ext.end());
     };
+    void updateWaveTrailColor() { waveTrailColor=cocos2d::ccColor3B{toGLubyte(waveTrailColorPicker[0]), toGLubyte(waveTrailColorPicker[1]), toGLubyte(waveTrailColorPicker[2])}; };
 };
 Toolbox toolbox;
 $on_mod(Loaded) {
@@ -362,9 +433,12 @@ $on_mod(Loaded) {
                 ImGui::SliderFloat("SFX Volume", &toolbox.getAudioEngine()->m_sfxVolume, 0.f, 1.f, "%.2f");
                 ImGui::SetItemTooltip("Equivalent to GD's SFX volume slider.");
                 ImGui::PopItemWidth();
-                ImGui::InputFloat("##", &toolbox.speedhack);
+                ImGui::InputFloat("##speedhack", &toolbox.speedhack);
                 ImGui::SameLine();
                 ImGui::Checkbox("Speedhack", &toolbox.speedhackEnabled);
+                ImGui::InputDouble("##tpsBypass", &toolbox.tpsBypass);
+                ImGui::SameLine();
+                ImGui::Checkbox("TPS Bypass", &toolbox.tpsBypassEnabled);
                 ImGui::TreePop();
             };
             if (ImGui::TreeNode("Player")) {
@@ -381,6 +455,9 @@ $on_mod(Loaded) {
                     ImGui::Checkbox("No Wave Trail", &toolbox.noWaveTrail);
                     ImGui::SetItemTooltip("Disables the wave trail.");
                     ImGui::PushItemWidth(200.f); 
+                    if (ImGui::ColorEdit3("##waveTrailColorPicker", toolbox.waveTrailColorPicker, ImGuiColorEditFlags_Uint8)) toolbox.updateWaveTrailColor();
+                    ImGui::SameLine();
+                    ImGui::Checkbox("Wave Trail Color", &toolbox.useWaveTrailColor);
                     ImGui::SliderFloat("Wave Trail Size", &toolbox.waveTrailSize, 0.f, 10.f, "%.2f");
                     ImGui::SetItemTooltip("Multiplier for the wave trail's size.");
                     ImGui::PopItemWidth();
@@ -414,26 +491,26 @@ $on_mod(Loaded) {
                         if (ImGui::TreeNode("Gamemode")) {
                             if (ImGui::TreeNode("Player 1")) {
                                 toolbox.gamemodeRadio1=toolbox.getGamemode(GJBaseGameLayer::get()->m_player1);
-                                if (ImGui::RadioButton("Cube", &toolbox.gamemodeRadio1, 0)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player1, 0);
-                                if (ImGui::RadioButton("Ship", &toolbox.gamemodeRadio1, 1)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player1, 1);
-                                if (ImGui::RadioButton("Ball", &toolbox.gamemodeRadio1, 2)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player1, 2);
-                                if (ImGui::RadioButton("UFO", &toolbox.gamemodeRadio1, 3)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player1, 3);
-                                if (ImGui::RadioButton("Wave", &toolbox.gamemodeRadio1, 4)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player1, 4);
-                                if (ImGui::RadioButton("Robot", &toolbox.gamemodeRadio1, 5)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player1, 5);
-                                if (ImGui::RadioButton("Spider", &toolbox.gamemodeRadio1, 6)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player1, 6);
-                                if (ImGui::RadioButton("Swing", &toolbox.gamemodeRadio1, 7)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player1, 7);
+                                if (ImGui::RadioButton("Cube", &toolbox.gamemodeRadio1, 0)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player1, 0);
+                                if (ImGui::RadioButton("Ship", &toolbox.gamemodeRadio1, 1)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player1, 1);
+                                if (ImGui::RadioButton("Ball", &toolbox.gamemodeRadio1, 2)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player1, 2);
+                                if (ImGui::RadioButton("UFO", &toolbox.gamemodeRadio1, 3)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player1, 3);
+                                if (ImGui::RadioButton("Wave", &toolbox.gamemodeRadio1, 4)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player1, 4);
+                                if (ImGui::RadioButton("Robot", &toolbox.gamemodeRadio1, 5)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player1, 5);
+                                if (ImGui::RadioButton("Spider", &toolbox.gamemodeRadio1, 6)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player1, 6);
+                                if (ImGui::RadioButton("Swing", &toolbox.gamemodeRadio1, 7)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player1, 7);
                                 ImGui::TreePop();
                             };
                             if (ImGui::TreeNode("Player 2")) {
                                 toolbox.gamemodeRadio2=toolbox.getGamemode(GJBaseGameLayer::get()->m_player2);
-                                if (ImGui::RadioButton("Cube", &toolbox.gamemodeRadio2, 0)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player2, 0);
-                                if (ImGui::RadioButton("Ship", &toolbox.gamemodeRadio2, 1)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player2, 1);
-                                if (ImGui::RadioButton("Ball", &toolbox.gamemodeRadio2, 2)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player2, 2);
-                                if (ImGui::RadioButton("UFO", &toolbox.gamemodeRadio2, 3)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player2, 3);
-                                if (ImGui::RadioButton("Wave", &toolbox.gamemodeRadio2, 4)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player2, 4);
-                                if (ImGui::RadioButton("Robot", &toolbox.gamemodeRadio2, 5)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player2, 5);
-                                if (ImGui::RadioButton("Spider", &toolbox.gamemodeRadio2, 6)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player2, 6);
-                                if (ImGui::RadioButton("Swing", &toolbox.gamemodeRadio2, 7)) toolbox.switchGamemode(GJBaseGameLayer::get()->m_player2, 7);
+                                if (ImGui::RadioButton("Cube", &toolbox.gamemodeRadio2, 0)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player2, 0);
+                                if (ImGui::RadioButton("Ship", &toolbox.gamemodeRadio2, 1)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player2, 1);
+                                if (ImGui::RadioButton("Ball", &toolbox.gamemodeRadio2, 2)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player2, 2);
+                                if (ImGui::RadioButton("UFO", &toolbox.gamemodeRadio2, 3)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player2, 3);
+                                if (ImGui::RadioButton("Wave", &toolbox.gamemodeRadio2, 4)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player2, 4);
+                                if (ImGui::RadioButton("Robot", &toolbox.gamemodeRadio2, 5)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player2, 5);
+                                if (ImGui::RadioButton("Spider", &toolbox.gamemodeRadio2, 6)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player2, 6);
+                                if (ImGui::RadioButton("Swing", &toolbox.gamemodeRadio2, 7)) toolbox.switchGamemodeFromMenu(GJBaseGameLayer::get()->m_player2, 7);
                                 ImGui::TreePop();
                             };
                             ImGui::TreePop();
@@ -443,6 +520,7 @@ $on_mod(Loaded) {
                 };
                 ImGui::Checkbox("Noclip", &toolbox.noclip);
                 ImGui::SetItemTooltip("Prevents the player from dying.");
+                ImGui::Checkbox("No Checkpoint Delay", &toolbox.noCheckpointDelay);
                 ImGui::Checkbox("No Respawn Flash", &toolbox.noRespawnFlash);
                 ImGui::SetItemTooltip("Disables the flash effect upon respawn.");
                 ImGui::TreePop();
@@ -480,7 +558,7 @@ $on_mod(Loaded) {
                 if (ImGui::Button("Shuffle Object Positions")&&EditorUI::get()!=nullptr&&EditorUI::get()->m_selectedObjects->count()>1) {
                     int count=EditorUI::get()->m_selectedObjects->count();
                     std::vector<cocos2d::CCPoint> positions;
-                    std::vector<GameObject*> selectedObjects=toolbox.editorObjectVec(EditorUI::get()->m_selectedObjects);
+                    std::vector<GameObject*> selectedObjects=toolbox.objectVec(EditorUI::get()->m_selectedObjects);
                     for (int i=0; i<count; ++i) positions.push_back(selectedObjects[i]->getUnmodifiedPosition());
                     std::ranges::shuffle(positions, std::default_random_engine{});
                     for (int i=0; i<count; ++i) selectedObjects[i]->setPosition(positions[i]);
@@ -514,6 +592,15 @@ $on_mod(Loaded) {
         toolbox.save();
     });
 };
+class $modify(UILayer) {
+    void onCheck(CCObject* sender) {
+        UILayer::onCheck(sender);
+        if ((rogue.state==1||toolbox.noCheckpointDelay)&&PlayLayer::get()!=nullptr) {
+            PlayLayer::get()->m_tryPlaceCheckpoint=false;
+            PlayLayer::get()->markCheckpoint();
+        };
+    };
+};
 class $modify(LevelInfoLayer) {
     bool init(GJGameLevel* level, bool challenge) {
         toolbox.lastLevel=level;
@@ -533,10 +620,11 @@ class $modify(GameObject) {
 };
 class $modify(PlayerObject) {
 	void update(float dt) {
-		this->update(dt);
+		PlayerObject::update(dt);
         if (toolbox.customWaveTrail) {
-		    if (toolbox.noWaveTrail) this->m_waveTrail->reset();
-		    this->m_waveTrail->m_waveSize=toolbox.waveTrailSize*this->m_vehicleSize;
+		    if (toolbox.noWaveTrail) m_waveTrail->reset();
+            if (toolbox.useWaveTrailColor) m_waveTrail->setColor(toolbox.waveTrailColor);
+		    m_waveTrail->m_waveSize=toolbox.waveTrailSize*m_vehicleSize;
         };
 	};
 	void playSpawnEffect() {
@@ -555,7 +643,12 @@ class $modify(GameManager) {
     };
 };
 class $modify(GJBaseGameLayer) {
+    void resetPlayer() {
+        toolbox.oneTimeCheatThisAttempt=false;
+        GJBaseGameLayer::resetPlayer();
+    };
     void update(float dt) {
+        if (GJBaseGameLayer::get()->m_gameState.m_currentProgress/2<1) toolbox.oneTimeCheatThisAttempt=false;
         toolbox.lastLevel=this->m_level;
         if (toolbox.autoKill&&!this->m_level->isPlatformer()&&PlayLayer::get()->getCurrentPercent()>=toolbox.autoKillPercentage) PlayLayer::get()->resetLevelFromStart();
         GJBaseGameLayer::update(dt);
@@ -573,7 +666,7 @@ class $modify(cocos2d::CCScheduler) {
 class $modify(EditorUI) {
     void rotateObjects(CCArray* objects, float rotation, CCPoint pivotPoint) {
         if (toolbox.individualRotate) {
-            for (auto& obj:toolbox.editorObjectVec(EditorUI::get()->m_selectedObjects)) if (obj->canRotateFree()||!std::fmod(rotation, 90.f)) obj->addRotation(rotation);
+            for (auto& obj:toolbox.objectVec(EditorUI::get()->m_selectedObjects)) if (obj->canRotateFree()||!std::fmod(rotation, 90.f)) obj->addRotation(rotation);
             return;
         };
         EditorUI::rotateObjects(objects, rotation, pivotPoint);
