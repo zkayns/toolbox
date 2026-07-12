@@ -227,7 +227,7 @@ struct Rogue {
                         .player=actions.at(i).m_player2,
                         .press=actions.at(i).m_holding,
                         .button=(actions.at(i).m_type==slc::Action::ActionType::Jump)?PlayerButton::Jump:((actions.at(i).m_type==slc::Action::ActionType::Left)?PlayerButton::Left:PlayerButton::Right),
-                        .tick=actions.at(i).m_frame
+                        .tick=actions.at(i).m_frame+1
                     });
                     macro.seed=sr.value().m_meta.m_seed;
                     macro.tps=sr.value().m_meta.m_tps;
