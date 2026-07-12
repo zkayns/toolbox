@@ -12,6 +12,7 @@
 #include <Geode/modify/EditorUI.hpp>
 #include <Geode/modify/UILayer.hpp>
 #include <imgui-cocos.hpp>
+#include "../include/slc/slc.hpp"
 using namespace geode::prelude;
 struct SavedIconsEntry {
     int cube;
@@ -161,6 +162,7 @@ struct RogueMacro {
     void cleanInputs() {
         std::erase_if(inputs, [](RogueInput input){
             if (input.tick>GJBaseGameLayer::get()->m_gameState.m_currentProgress/2) return true;
+            if (input.tick<1) return true;
             if (!GJBaseGameLayer::get()->m_isPlatformer&&input.button!=PlayerButton::Jump) return true;
             return input.remove;
         });
@@ -173,24 +175,69 @@ struct RogueMacro {
 };
 struct Rogue {
     RogueMacro macro;
-    int state=0;
+    int state;
     uint64_t lastPress;
     uint64_t lastRelease;
-    std::filesystem::path macroSavePath(std::string fileName) { return Mod::get()->getSaveDir()/"rogue"/"macros"/(fileName+".rgb"); };
-    void save() { geode::utils::file::writeString(macroSavePath(std::string(macro.name)), macro.toString()); };
+    int format;
+    std::filesystem::path macroSavePath(std::string fileName, std::string format) { return Mod::get()->getSaveDir()/"rogue"/"macros"/(fileName+"."+format); };
+    void save() { 
+        switch (format) {
+            case 0: { // RGB
+                geode::utils::file::writeString(macroSavePath(std::string(macro.name), "rgb"), macro.toString()); 
+                break;
+            };
+            case 1: { // SLC
+                slc::ActionAtom actions;
+                for (const auto& input:macro.inputs) actions.addAction(input.tick-1, (input.button==PlayerButton::Jump)?slc::Action::ActionType::Jump:((input.button==PlayerButton::Left)?slc::Action::ActionType::Left:slc::Action::ActionType::Right), input.press, input.player);
+                slc::Replay<> replay;
+                replay.m_meta.m_tps=macro.tps;
+                replay.m_meta.m_seed=macro.seed;
+                replay.m_atoms.add(std::move(actions));
+                std::ofstream file(macroSavePath(std::string(macro.name), "slc"), std::ios::binary);
+                replay.write(file);
+                break;
+            };
+        };
+    };
     void load() {
-        char macroName[128];
-        strcpy(macroName, macro.name);
-        auto result=geode::utils::file::readString(macroSavePath(std::string(macroName))).ok();
-        macro=RogueMacro{};
-        strcpy(macro.name, macroName);
-        if (!result.has_value()) return;
-        auto split=geode::utils::string::splitView(result.value(), "|");
-        if (split.size()<3) return;
-        macro.tps=std::stod(std::string(split[0]));
-        macro.seed=std::stoi(std::string(split[1]));
-        std::vector<std::string_view> inputStrings(split.begin()+2, split.end());
-        for (const auto& s:inputStrings) macro.inputs.push_back(RogueInput::fromString(std::string(s)));
+        switch (format) {
+            case 0: { // RGB
+                char macroName[128];
+                strcpy(macroName, macro.name);
+                auto result=geode::utils::file::readString(macroSavePath(std::string(macroName), "rgb")).ok();
+                macro=RogueMacro{};
+                strcpy(macro.name, macroName);
+                if (!result.has_value()) break;
+                auto split=geode::utils::string::splitView(result.value(), "|");
+                if (split.size()<3) break;
+                macro.tps=std::stod(std::string(split[0]));
+                macro.seed=std::stoi(std::string(split[1]));
+                std::vector<std::string_view> inputStrings(split.begin()+2, split.end());
+                for (const auto& s:inputStrings) macro.inputs.push_back(RogueInput::fromString(std::string(s)));
+                break;
+            };
+            case 1: { // SLC
+                std::ifstream file(macroSavePath(std::string(macro.name), "slc"), std::ios::binary);
+                auto sr=slc::v3::Replay<>::read(file);
+                if (sr.has_value()) {
+                    macro.inputs.clear();
+                    auto& atoms=sr.value().m_atoms.m_atoms;
+                    auto actions=std::get<slc::ActionAtom>(*(std::find_if(atoms.begin(), atoms.end(), [](auto& v) { return std::visit([](auto& at) { return at.id == slc::v3::AtomId::Action; }, v); }))).m_actions;
+                    for (int i=0; i<actions.size(); ++i) macro.inputs.push_back(RogueInput{
+                        .player=actions.at(i).m_player2,
+                        .press=actions.at(i).m_holding,
+                        .button=(actions.at(i).m_type==slc::Action::ActionType::Jump)?PlayerButton::Jump:((actions.at(i).m_type==slc::Action::ActionType::Left)?PlayerButton::Left:PlayerButton::Right),
+                        .tick=actions.at(i).m_frame
+                    });
+                    macro.seed=sr.value().m_meta.m_seed;
+                    macro.tps=sr.value().m_meta.m_tps;
+                };
+                break;
+            };
+        };
+        std::erase_if(macro.inputs, [](RogueInput input){
+            return input.tick<1;
+        });
     };
 };
 Rogue rogue;
@@ -580,6 +627,11 @@ $on_mod(Loaded) {
                 if (ImGui::Button("Load")) rogue.load();
                 ImGui::SameLine();
                 if (ImGui::Button("Clear")) rogue.macro.inputs.clear();
+                if (ImGui::TreeNode("Replay Format")) {
+                    ImGui::RadioButton(".rgb (Rogue)", &rogue.format, 0);
+                    ImGui::RadioButton(".slc (Silicate v3)", &rogue.format, 1);
+                    ImGui::TreePop();
+                };
                 if (PlayLayer::get()!=nullptr) ImGui::Text("tick %s", std::to_string(GJBaseGameLayer::get()->m_gameState.m_currentProgress/2).c_str());
                 else ImGui::Text("tick 0");
                 ImGui::Text("inputs %s", std::to_string(rogue.macro.inputs.size()).c_str());
