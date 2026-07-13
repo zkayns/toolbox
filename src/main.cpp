@@ -14,6 +14,12 @@
 #include <imgui-cocos.hpp>
 #include "../include/slc/slc.hpp"
 using namespace geode::prelude;
+struct Shared {
+    static uint64_t getTick() {
+        if (GJBaseGameLayer::get()==nullptr) return 0;
+        return GJBaseGameLayer::get()->m_gameState.m_currentProgress/2;
+    };
+};
 struct SavedIconsEntry {
     int cube;
     int ship;
@@ -161,7 +167,7 @@ struct RogueMacro {
     std::vector<RogueInput> inputs;
     void cleanInputs() {
         std::erase_if(inputs, [](RogueInput input){
-            if (input.tick>GJBaseGameLayer::get()->m_gameState.m_currentProgress/2) return true;
+            if (input.tick>Shared::getTick()) return true;
             if (input.tick<1) return true;
             if (!GJBaseGameLayer::get()->m_isPlatformer&&input.button!=PlayerButton::Jump) return true;
             return input.remove;
@@ -254,7 +260,7 @@ class $modify(PlayerObject) {
         };
         if (rogue.state==2) {
             for (const auto& input:rogue.macro.inputs) {
-                if (input.tick==GJBaseGameLayer::get()->m_gameState.m_currentProgress/2) {
+                if (input.tick==Shared::getTick()) {
                     if (input.player) {
                         if (input.press) GJBaseGameLayer::get()->m_player2->pushButton(input.button);
                         else GJBaseGameLayer::get()->m_player2->releaseButton(input.button);
@@ -272,26 +278,26 @@ class $modify(PlayerObject) {
     };
     bool pushButton(PlayerButton button) {
         if (PlayLayer::get()==nullptr) return PlayerObject::pushButton(button); // prevent menu player inputs wtf bro
-        rogue.lastPress=GJBaseGameLayer::get()->m_gameState.m_currentProgress/2;
+        rogue.lastPress=Shared::getTick();
         if (rogue.state==1) {
             rogue.macro.inputs.push_back(RogueInput{
                 .player=this->isPlayer2(),
                 .press=true,
                 .button=button,
-                .tick=GJBaseGameLayer::get()->m_gameState.m_currentProgress/2
+                .tick=Shared::getTick()
             });
         };
         return PlayerObject::pushButton(button);
     };
     bool releaseButton(PlayerButton button) {
         if (PlayLayer::get()==nullptr) return PlayerObject::releaseButton(button);
-        rogue.lastRelease=GJBaseGameLayer::get()->m_gameState.m_currentProgress/2;
+        rogue.lastRelease=Shared::getTick();
         if (rogue.state==1) {
             rogue.macro.inputs.push_back(RogueInput{
                 .player=this->isPlayer2(),
                 .press=false,
                 .button=button,
-                .tick=GJBaseGameLayer::get()->m_gameState.m_currentProgress/2
+                .tick=Shared::getTick()
             });
         };
         return PlayerObject::releaseButton(button);
@@ -346,6 +352,7 @@ struct Toolbox {
     double realTpsBypass;
     double tpsBypass;
     bool tpsBypassEnabled;
+    bool maintainGravity;
     bool isCheating() {
         return (
             noclip||
@@ -425,6 +432,7 @@ struct Toolbox {
         noCheckpointDelay=getMod()->getSavedValue<bool>("noCheckpointDelay", false);
         tpsBypass=getMod()->getSavedValue<double>("tpsBypass", 240.0);
         tpsBypassEnabled=getMod()->getSavedValue<bool>("tpsBypassEnabled", false);
+        maintainGravity=getMod()->getSavedValue<bool>("maintainGravity", false);
     };
     void save() {
         getMod()->setSavedValue<bool>("autoKill", autoKill);
@@ -446,6 +454,7 @@ struct Toolbox {
         getMod()->setSavedValue<bool>("noCheckpointDelay", noCheckpointDelay);
         getMod()->setSavedValue<double>("tpsBypass", tpsBypass);
         getMod()->setSavedValue<bool>("tpsBypassEnabled", tpsBypassEnabled);
+        getMod()->setSavedValue<bool>("maintainGravity", maintainGravity);
     };
     std::vector<GameObject*> objectVec(cocos2d::CCArray* source) {
         auto ext=CCArrayExt<GameObject*>(source);
@@ -517,6 +526,7 @@ $on_mod(Loaded) {
                     if (ImGui::Button("Load Kit")) toolbox.loadIcons();
                     ImGui::TreePop();
                 };
+                ImGui::Checkbox("Maintain Gravity", &toolbox.maintainGravity);
                 if (ImGui::TreeNode("Manager")) {
                     if (PlayLayer::get()==nullptr) ImGui::Text("No level open");
                     else {
@@ -632,7 +642,7 @@ $on_mod(Loaded) {
                     ImGui::RadioButton(".slc (Silicate v3)", &rogue.format, 1);
                     ImGui::TreePop();
                 };
-                if (PlayLayer::get()!=nullptr) ImGui::Text("tick %s", std::to_string(GJBaseGameLayer::get()->m_gameState.m_currentProgress/2).c_str());
+                if (PlayLayer::get()!=nullptr) ImGui::Text("tick %s", std::to_string(Shared::getTick()).c_str());
                 else ImGui::Text("tick 0");
                 ImGui::Text("inputs %s", std::to_string(rogue.macro.inputs.size()).c_str());
                 ImGui::Text("last press %s", std::to_string(rogue.lastPress).c_str());
@@ -670,7 +680,45 @@ class $modify(GameObject) {
         return ret;
     };
 };
-class $modify(PlayerObject) {
+class $modify(ToolboxPlayer, PlayerObject) {
+    struct Fields {
+        bool m_isMGInput;
+        bool m_jumpIsDown;
+    };
+    bool pushButton(PlayerButton button) {
+        if (Shared::getTick()&&!m_fields->m_isMGInput&&toolbox.maintainGravity&&button==PlayerButton::Jump&&m_isUpsideDown) {
+            m_fields->m_isMGInput=true;
+            bool ret=!PlayerObject::releaseButton(button);
+            m_fields->m_isMGInput=false;
+            return ret;
+        };
+        m_fields->m_jumpIsDown=true;
+        return PlayerObject::pushButton(button);
+    };
+    bool releaseButton(PlayerButton button) {
+        if (Shared::getTick()&&!m_fields->m_isMGInput&&toolbox.maintainGravity&&button==PlayerButton::Jump&&m_isUpsideDown) {
+            m_fields->m_isMGInput=true;
+            bool ret=!PlayerObject::pushButton(button);
+            m_fields->m_isMGInput=false;
+            return ret;
+        };
+        m_fields->m_jumpIsDown=false;
+        return PlayerObject::releaseButton(button);
+    };
+    void flipGravity(bool flip, bool noEffects) {
+        if (toolbox.maintainGravity) {
+            if (m_fields->m_jumpIsDown) {
+                m_fields->m_isMGInput=true;
+                PlayerObject::releaseButton(PlayerButton::Jump);
+                m_fields->m_isMGInput=false;
+            } else {
+                m_fields->m_isMGInput=true;
+                PlayerObject::pushButton(PlayerButton::Jump);
+                m_fields->m_isMGInput=false;
+            };
+        };
+        PlayerObject::flipGravity(flip, noEffects);
+    };
 	void update(float dt) {
 		PlayerObject::update(dt);
         if (toolbox.customWaveTrail) {
@@ -700,7 +748,7 @@ class $modify(GJBaseGameLayer) {
         GJBaseGameLayer::resetPlayer();
     };
     void update(float dt) {
-        if (GJBaseGameLayer::get()->m_gameState.m_currentProgress/2<1) toolbox.oneTimeCheatThisAttempt=false;
+        if (Shared::getTick()<1) toolbox.oneTimeCheatThisAttempt=false;
         toolbox.lastLevel=this->m_level;
         if (toolbox.autoKill&&!this->m_level->isPlatformer()&&PlayLayer::get()->getCurrentPercent()>=toolbox.autoKillPercentage) PlayLayer::get()->resetLevelFromStart();
         GJBaseGameLayer::update(dt);
