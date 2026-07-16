@@ -20,15 +20,6 @@ struct Shared {
         if (GJBaseGameLayer::get()==nullptr) return 0;
         return GJBaseGameLayer::get()->m_gameState.m_currentProgress/2;
     };
-    static void playerInput(PlayerButton button, bool player, bool press) {
-        if (press) {
-            if (player) GJBaseGameLayer::get()->m_player2->pushButton(button);
-            else GJBaseGameLayer::get()->m_player1->pushButton(button);
-            return;
-        };
-        if (player) GJBaseGameLayer::get()->m_player2->releaseButton(button);
-        else GJBaseGameLayer::get()->m_player1->releaseButton(button);
-    };
 };
 struct SavedIconsEntry {
     int cube;
@@ -196,6 +187,7 @@ struct Rogue {
     uint64_t lastRelease;
     int format;
     std::filesystem::path macroSavePath(std::string fileName, std::string format) { return Mod::get()->getSaveDir()/"rogue"/"macros"/(fileName+"."+format); };
+    void replayFrame() { for (const auto& input:macro.inputs) if (input.tick==Shared::getTick()&&(!input.player||GJBaseGameLayer::get()->m_level->m_twoPlayerMode)) GJBaseGameLayer::get()->handleButton(input.press, static_cast<int>(input.button), !input.player); };
     void save() { 
         switch (format) {
             case 0: { // RGB
@@ -257,6 +249,17 @@ struct Rogue {
     };
 };
 Rogue rogue;
+class $modify(GJBaseGameLayer) {
+    void handleButton(bool down, int button, bool isPlayer1) {
+        if (rogue.state==1) rogue.macro.inputs.push_back(RogueInput{
+            .player=!isPlayer1,
+            .press=down,
+            .button=static_cast<PlayerButton>(button),
+            .tick=Shared::getTick()
+        });
+        GJBaseGameLayer::handleButton(down, button, isPlayer1);
+    };
+};
 class $modify(PlayerObject) {
     void loadFromCheckpoint(PlayerCheckpoint* object) {
         PlayerObject::loadFromCheckpoint(object);
@@ -268,47 +271,12 @@ class $modify(PlayerObject) {
             PlayerObject::update(dt);
             return;
         };
-        if (rogue.state==2) {
-            for (const auto& input:rogue.macro.inputs) {
-                if (input.tick==Shared::getTick()&&(!input.player||GJBaseGameLayer::get()->m_level->m_twoPlayerMode)) {
-                    if (GJBaseGameLayer::get()->m_level->m_twoPlayerMode) Shared::playerInput(input.button, input.player, input.press);
-                    else {
-                        Shared::playerInput(input.button, false, input.press);
-                        Shared::playerInput(input.button, true, input.press);
-                    };
-                };
-            };
-        } else if (rogue.state==1) {
+        if (rogue.state==2) rogue.replayFrame();
+        else if (rogue.state==1) {
             rogue.macro.seed=GJBaseGameLayer::get()->m_randomSeed;
             rogue.macro.cleanInputs();
         };
         PlayerObject::update(dt);
-    };
-    bool pushButton(PlayerButton button) {
-        if (PlayLayer::get()==nullptr) return PlayerObject::pushButton(button); // prevent menu player inputs wtf bro
-        if (rogue.state==1&&!m_isDead&&(isPlayer1()||GJBaseGameLayer::get()->m_level->m_twoPlayerMode)) {
-            rogue.lastPress=Shared::getTick();
-            rogue.macro.inputs.push_back(RogueInput{
-                .player=this->isPlayer2(),
-                .press=true,
-                .button=button,
-                .tick=Shared::getTick()
-            });
-        };
-        return PlayerObject::pushButton(button);
-    };
-    bool releaseButton(PlayerButton button) {
-        if (PlayLayer::get()==nullptr) return PlayerObject::releaseButton(button);
-        if (rogue.state==1&&!m_isDead&&(isPlayer1()||GJBaseGameLayer::get()->m_level->m_twoPlayerMode)) {
-            rogue.lastRelease=Shared::getTick();
-            rogue.macro.inputs.push_back(RogueInput{
-                .player=this->isPlayer2(),
-                .press=false,
-                .button=button,
-                .tick=Shared::getTick()
-            });
-        };
-        return PlayerObject::releaseButton(button);
     };
 };
 class $modify(PlayLayer) {
