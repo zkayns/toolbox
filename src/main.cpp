@@ -11,6 +11,7 @@
 #include <Geode/modify/CCScheduler.hpp>
 #include <Geode/modify/EditorUI.hpp>
 #include <Geode/modify/UILayer.hpp>
+#include <Geode/modify/GJGameLevel.hpp>
 #include <imgui-cocos.hpp>
 #include "../include/slc/slc.hpp"
 using namespace geode::prelude;
@@ -18,6 +19,15 @@ struct Shared {
     static uint64_t getTick() {
         if (GJBaseGameLayer::get()==nullptr) return 0;
         return GJBaseGameLayer::get()->m_gameState.m_currentProgress/2;
+    };
+    static void playerInput(PlayerButton button, bool player, bool press) {
+        if (press) {
+            if (player) GJBaseGameLayer::get()->m_player2->pushButton(button);
+            else GJBaseGameLayer::get()->m_player1->pushButton(button);
+            return;
+        };
+        if (player) GJBaseGameLayer::get()->m_player2->releaseButton(button);
+        else GJBaseGameLayer::get()->m_player1->releaseButton(button);
     };
 };
 struct SavedIconsEntry {
@@ -260,13 +270,11 @@ class $modify(PlayerObject) {
         };
         if (rogue.state==2) {
             for (const auto& input:rogue.macro.inputs) {
-                if (input.tick==Shared::getTick()) {
-                    if (input.player) {
-                        if (input.press) GJBaseGameLayer::get()->m_player2->pushButton(input.button);
-                        else GJBaseGameLayer::get()->m_player2->releaseButton(input.button);
-                    } else {
-                        if (input.press) GJBaseGameLayer::get()->m_player1->pushButton(input.button);
-                        else GJBaseGameLayer::get()->m_player1->releaseButton(input.button);
+                if (input.tick==Shared::getTick()&&(!input.player||GJBaseGameLayer::get()->m_level->m_twoPlayerMode)) {
+                    if (GJBaseGameLayer::get()->m_level->m_twoPlayerMode) Shared::playerInput(input.button, input.player, input.press);
+                    else {
+                        Shared::playerInput(input.button, false, input.press);
+                        Shared::playerInput(input.button, true, input.press);
                     };
                 };
             };
@@ -278,7 +286,7 @@ class $modify(PlayerObject) {
     };
     bool pushButton(PlayerButton button) {
         if (PlayLayer::get()==nullptr) return PlayerObject::pushButton(button); // prevent menu player inputs wtf bro
-        if (rogue.state==1&&!m_isDead) {
+        if (rogue.state==1&&!m_isDead&&(isPlayer1()||GJBaseGameLayer::get()->m_level->m_twoPlayerMode)) {
             rogue.lastPress=Shared::getTick();
             rogue.macro.inputs.push_back(RogueInput{
                 .player=this->isPlayer2(),
@@ -291,7 +299,7 @@ class $modify(PlayerObject) {
     };
     bool releaseButton(PlayerButton button) {
         if (PlayLayer::get()==nullptr) return PlayerObject::releaseButton(button);
-        if (rogue.state==1&&!m_isDead) {
+        if (rogue.state==1&&!m_isDead&&(isPlayer1()||GJBaseGameLayer::get()->m_level->m_twoPlayerMode)) {
             rogue.lastRelease=Shared::getTick();
             rogue.macro.inputs.push_back(RogueInput{
                 .player=this->isPlayer2(),
@@ -916,6 +924,7 @@ struct Toolbox {
     float layoutMG2ColorPicker[3];
     cocos2d::ccColor3B layoutBGColor;
     float layoutBGColorPicker[3];
+    bool verifyHack;
     bool isCheating() {
         return (
             noclip||
@@ -941,7 +950,7 @@ struct Toolbox {
     bool iconKitExists(const std::string fileName) {
         return std::filesystem::exists(iconSavePath(fileName));
     };
-    std::filesystem::path iconSavePath(const std::string fileName) { return getMod()->getSaveDir()/"iconKits"/(fileName+".tbg"); };
+    std::filesystem::path iconSavePath(const std::string fileName) { return Toolbox::getMod()->getSaveDir()/"iconKits"/(fileName+".tbg"); };
     static int getGamemode(const PlayerObject* player) {
         if (player->m_isShip) return 1;
         if (player->m_isBall) return 2;
@@ -971,102 +980,113 @@ struct Toolbox {
     void saveIcons() {
         geode::utils::file::writeToJson<SavedIconsEntry>(iconSavePath(iconSaveName), SavedIconsEntry::fromCurrent());
     };
-    GLubyte toGLubyte(float f) { return static_cast<GLubyte>(std::clamp<float>(std::round(f*255.f), 0.f, 255.f)); };
-    Mod* getMod() { return Mod::get(); };
-    FMODAudioEngine* getAudioEngine() { return FMODAudioEngine::get(); };
+    static GLubyte toGLubyte(float f) { return static_cast<GLubyte>(std::clamp<float>(std::round(f*255.f), 0.f, 255.f)); };
+    static Mod* getMod() { return Mod::get(); };
+    static FMODAudioEngine* getAudioEngine() { return FMODAudioEngine::get(); };
     void load() {
-        autoKill=getMod()->getSavedValue<bool>("autoKill", false);
-        autoKillPercentage=getMod()->getSavedValue<float>("autoKillPercentage", 50.f);
-        customWaveTrail=getMod()->getSavedValue<bool>("customWaveTrail", false);
-        fontScale=getMod()->getSavedValue<float>("fontScale", 1.f);
-        iconHack=getMod()->getSavedValue<bool>("iconHack", false);
-        noclip=getMod()->getSavedValue<bool>("noclip", false);
-        noCollide=getMod()->getSavedValue<bool>("noCollide", false);
-        noObjectGlow=getMod()->getSavedValue<bool>("noObjectGlow", false);
-        noRespawnFlash=getMod()->getSavedValue<bool>("noRespawnFlash", false);
-        noWaveTrail=getMod()->getSavedValue<bool>("noWaveTrail", false);
-        waveTrailSize=getMod()->getSavedValue<float>("waveTrailSize", 1.f);
-        speedhack=getMod()->getSavedValue<float>("speedhack", 1.f);
-        speedhackEnabled=getMod()->getSavedValue<bool>("speedhackEnabled", false);
-        individualRotate=getMod()->getSavedValue<bool>("individualRotate", false);
-        waveTrailColor=getMod()->getSavedValue<cocos2d::ccColor3B>("waveTrailColor", cocos2d::ccColor3B{255, 0, 0});
-        loadColorPicker(&waveTrailColor, waveTrailColorPicker);
-        useWaveTrailColor=getMod()->getSavedValue<bool>("useWaveTrailColor", false);
-        noCheckpointDelay=getMod()->getSavedValue<bool>("noCheckpointDelay", false);
-        tpsBypass=getMod()->getSavedValue<double>("tpsBypass", 240.0);
-        tpsBypassEnabled=getMod()->getSavedValue<bool>("tpsBypassEnabled", false);
-        maintainGravity=getMod()->getSavedValue<bool>("maintainGravity", false);
-        showLayout=getMod()->getSavedValue<bool>("showLayout", false);
-        layoutBGColor=getMod()->getSavedValue<cocos2d::ccColor3B>("layoutBGColor", cocos2d::ccColor3B{40, 125, 255});
-        loadColorPicker(&layoutBGColor, layoutBGColorPicker);
-        layoutG1Color=getMod()->getSavedValue<cocos2d::ccColor3B>("layoutG1Color", cocos2d::ccColor3B{0, 102, 255});
-        loadColorPicker(&layoutG1Color, layoutG1ColorPicker);
-        layoutG2Color=getMod()->getSavedValue<cocos2d::ccColor3B>("layoutG2Color", cocos2d::ccColor3B{0, 102, 255});
-        loadColorPicker(&layoutG2Color, layoutG2ColorPicker);
-        layoutLineColor=getMod()->getSavedValue<cocos2d::ccColor3B>("layoutLineColor", cocos2d::ccColor3B{255, 255, 255});
-        loadColorPicker(&layoutLineColor, layoutLineColorPicker);
-        layoutMGColor=getMod()->getSavedValue<cocos2d::ccColor3B>("layoutMGColor", cocos2d::ccColor3B{40, 125, 255});
-        loadColorPicker(&layoutMGColor, layoutMGColorPicker);
-        layoutMG2Color=getMod()->getSavedValue<cocos2d::ccColor3B>("layoutMG2Color", cocos2d::ccColor3B{40, 125, 255});
-        loadColorPicker(&layoutMG2Color, layoutMG2ColorPicker);
+        autoKill=Toolbox::getMod()->getSavedValue<bool>("autoKill", false);
+        autoKillPercentage=Toolbox::getMod()->getSavedValue<float>("autoKillPercentage", 50.f);
+        customWaveTrail=Toolbox::getMod()->getSavedValue<bool>("customWaveTrail", false);
+        fontScale=Toolbox::getMod()->getSavedValue<float>("fontScale", 1.f);
+        iconHack=Toolbox::getMod()->getSavedValue<bool>("iconHack", false);
+        noclip=Toolbox::getMod()->getSavedValue<bool>("noclip", false);
+        noCollide=Toolbox::getMod()->getSavedValue<bool>("noCollide", false);
+        noObjectGlow=Toolbox::getMod()->getSavedValue<bool>("noObjectGlow", false);
+        noRespawnFlash=Toolbox::getMod()->getSavedValue<bool>("noRespawnFlash", false);
+        noWaveTrail=Toolbox::getMod()->getSavedValue<bool>("noWaveTrail", false);
+        waveTrailSize=Toolbox::getMod()->getSavedValue<float>("waveTrailSize", 1.f);
+        speedhack=Toolbox::getMod()->getSavedValue<float>("speedhack", 1.f);
+        speedhackEnabled=Toolbox::getMod()->getSavedValue<bool>("speedhackEnabled", false);
+        individualRotate=Toolbox::getMod()->getSavedValue<bool>("individualRotate", false);
+        waveTrailColor=Toolbox::getMod()->getSavedValue<cocos2d::ccColor3B>("waveTrailColor", cocos2d::ccColor3B{255, 0, 0});
+        Toolbox::loadColorPicker(&waveTrailColor, waveTrailColorPicker);
+        useWaveTrailColor=Toolbox::getMod()->getSavedValue<bool>("useWaveTrailColor", false);
+        noCheckpointDelay=Toolbox::getMod()->getSavedValue<bool>("noCheckpointDelay", false);
+        tpsBypass=Toolbox::getMod()->getSavedValue<double>("tpsBypass", 240.0);
+        tpsBypassEnabled=Toolbox::getMod()->getSavedValue<bool>("tpsBypassEnabled", false);
+        maintainGravity=Toolbox::getMod()->getSavedValue<bool>("maintainGravity", false);
+        showLayout=Toolbox::getMod()->getSavedValue<bool>("showLayout", false);
+        layoutBGColor=Toolbox::getMod()->getSavedValue<cocos2d::ccColor3B>("layoutBGColor", cocos2d::ccColor3B{40, 125, 255});
+        Toolbox::loadColorPicker(&layoutBGColor, layoutBGColorPicker);
+        layoutG1Color=Toolbox::getMod()->getSavedValue<cocos2d::ccColor3B>("layoutG1Color", cocos2d::ccColor3B{0, 102, 255});
+        Toolbox::loadColorPicker(&layoutG1Color, layoutG1ColorPicker);
+        layoutG2Color=Toolbox::getMod()->getSavedValue<cocos2d::ccColor3B>("layoutG2Color", cocos2d::ccColor3B{0, 102, 255});
+        Toolbox::loadColorPicker(&layoutG2Color, layoutG2ColorPicker);
+        layoutLineColor=Toolbox::getMod()->getSavedValue<cocos2d::ccColor3B>("layoutLineColor", cocos2d::ccColor3B{255, 255, 255});
+        Toolbox::loadColorPicker(&layoutLineColor, layoutLineColorPicker);
+        layoutMGColor=Toolbox::getMod()->getSavedValue<cocos2d::ccColor3B>("layoutMGColor", cocos2d::ccColor3B{40, 125, 255});
+        Toolbox::loadColorPicker(&layoutMGColor, layoutMGColorPicker);
+        layoutMG2Color=Toolbox::getMod()->getSavedValue<cocos2d::ccColor3B>("layoutMG2Color", cocos2d::ccColor3B{40, 125, 255});
+        Toolbox::loadColorPicker(&layoutMG2Color, layoutMG2ColorPicker);
+        verifyHack=Toolbox::getMod()->getSavedValue<bool>("verifyHack", false);
     };
     void save() {
-        getMod()->setSavedValue<bool>("autoKill", autoKill);
-        getMod()->setSavedValue<float>("autoKillPercentage", autoKillPercentage);
-        getMod()->setSavedValue<bool>("customWaveTrail", customWaveTrail);
-        getMod()->setSavedValue<float>("fontScale", fontScale);
-        getMod()->setSavedValue<bool>("iconHack", iconHack);
-        getMod()->setSavedValue<bool>("noclip", noclip);
-        getMod()->setSavedValue<bool>("noCollide", noCollide);
-        getMod()->setSavedValue<bool>("noObjectGlow", noObjectGlow);
-        getMod()->setSavedValue<bool>("noRespawnFlash", noRespawnFlash);
-        getMod()->setSavedValue<bool>("noWaveTrail", noWaveTrail);
-        getMod()->setSavedValue<float>("waveTrailSize", waveTrailSize);
-        getMod()->setSavedValue<float>("speedhack", speedhack);
-        getMod()->setSavedValue<float>("speedhackEnabled", speedhackEnabled);
-        getMod()->setSavedValue<bool>("individualRotate", individualRotate);
-        getMod()->setSavedValue<cocos2d::ccColor3B>("waveTrailColor", waveTrailColor);
-        getMod()->setSavedValue<bool>("useWaveTrailColor", useWaveTrailColor);
-        getMod()->setSavedValue<bool>("noCheckpointDelay", noCheckpointDelay);
-        getMod()->setSavedValue<double>("tpsBypass", tpsBypass);
-        getMod()->setSavedValue<bool>("tpsBypassEnabled", tpsBypassEnabled);
-        getMod()->setSavedValue<bool>("maintainGravity", maintainGravity);
-        getMod()->setSavedValue<bool>("showLayout", showLayout);
-        getMod()->setSavedValue<cocos2d::ccColor3B>("layoutBGColor", layoutBGColor);
-        getMod()->setSavedValue<cocos2d::ccColor3B>("layoutG1Color", layoutG1Color);
-        getMod()->setSavedValue<cocos2d::ccColor3B>("layoutG2Color", layoutG2Color);
-        getMod()->setSavedValue<cocos2d::ccColor3B>("layoutLineColor", layoutLineColor);
-        getMod()->setSavedValue<cocos2d::ccColor3B>("layoutMGColor", layoutMGColor);
-        getMod()->setSavedValue<cocos2d::ccColor3B>("layoutMG2Color", layoutMG2Color);
+        Toolbox::getMod()->setSavedValue<bool>("autoKill", autoKill);
+        Toolbox::getMod()->setSavedValue<float>("autoKillPercentage", autoKillPercentage);
+        Toolbox::getMod()->setSavedValue<bool>("customWaveTrail", customWaveTrail);
+        Toolbox::getMod()->setSavedValue<float>("fontScale", fontScale);
+        Toolbox::getMod()->setSavedValue<bool>("iconHack", iconHack);
+        Toolbox::getMod()->setSavedValue<bool>("noclip", noclip);
+        Toolbox::getMod()->setSavedValue<bool>("noCollide", noCollide);
+        Toolbox::getMod()->setSavedValue<bool>("noObjectGlow", noObjectGlow);
+        Toolbox::getMod()->setSavedValue<bool>("noRespawnFlash", noRespawnFlash);
+        Toolbox::getMod()->setSavedValue<bool>("noWaveTrail", noWaveTrail);
+        Toolbox::getMod()->setSavedValue<float>("waveTrailSize", waveTrailSize);
+        Toolbox::getMod()->setSavedValue<float>("speedhack", speedhack);
+        Toolbox::getMod()->setSavedValue<float>("speedhackEnabled", speedhackEnabled);
+        Toolbox::getMod()->setSavedValue<bool>("individualRotate", individualRotate);
+        Toolbox::getMod()->setSavedValue<cocos2d::ccColor3B>("waveTrailColor", waveTrailColor);
+        Toolbox::getMod()->setSavedValue<bool>("useWaveTrailColor", useWaveTrailColor);
+        Toolbox::getMod()->setSavedValue<bool>("noCheckpointDelay", noCheckpointDelay);
+        Toolbox::getMod()->setSavedValue<double>("tpsBypass", tpsBypass);
+        Toolbox::getMod()->setSavedValue<bool>("tpsBypassEnabled", tpsBypassEnabled);
+        Toolbox::getMod()->setSavedValue<bool>("maintainGravity", maintainGravity);
+        Toolbox::getMod()->setSavedValue<bool>("showLayout", showLayout);
+        Toolbox::getMod()->setSavedValue<cocos2d::ccColor3B>("layoutBGColor", layoutBGColor);
+        Toolbox::getMod()->setSavedValue<cocos2d::ccColor3B>("layoutG1Color", layoutG1Color);
+        Toolbox::getMod()->setSavedValue<cocos2d::ccColor3B>("layoutG2Color", layoutG2Color);
+        Toolbox::getMod()->setSavedValue<cocos2d::ccColor3B>("layoutLineColor", layoutLineColor);
+        Toolbox::getMod()->setSavedValue<cocos2d::ccColor3B>("layoutMGColor", layoutMGColor);
+        Toolbox::getMod()->setSavedValue<cocos2d::ccColor3B>("layoutMG2Color", layoutMG2Color);
+        Toolbox::getMod()->setSavedValue<bool>("verifyHack", verifyHack);
     };
-    std::vector<GameObject*> objectVec(cocos2d::CCArray* source) {
+    static std::vector<GameObject*> objectVec(cocos2d::CCArray* source) {
         auto ext=CCArrayExt<GameObject*>(source);
         return std::vector<GameObject*>(ext.begin(), ext.end());
     };
     static bool isDecoration(const GameObject* obj) { return obj->m_isNoTouch||!Toolbox::layoutObjs.contains(obj->m_objectID); };
     static bool isCosmetic(const GameObject* obj) { return Toolbox::cosmeticObjs.contains(obj->m_objectID); };
-    void updateColorPicker(float* source, cocos2d::ccColor3B* destination) {
-        destination->r=toGLubyte(source[0]);
-        destination->g=toGLubyte(source[1]);
-        destination->b=toGLubyte(source[2]);
+    static void updateColorPicker(float* source, cocos2d::ccColor3B* destination) {
+        destination->r=Toolbox::toGLubyte(source[0]);
+        destination->g=Toolbox::toGLubyte(source[1]);
+        destination->b=Toolbox::toGLubyte(source[2]);
     };
-    void loadColorPicker(cocos2d::ccColor3B* source, float* destination) {
+    static void loadColorPicker(cocos2d::ccColor3B* source, float* destination) {
         destination[0]=static_cast<float>(source->r)/255.f;
         destination[1]=static_cast<float>(source->g)/255.f;
         destination[2]=static_cast<float>(source->b)/255.f;
     };
     void colorPickerChange() { 
-        updateColorPicker(waveTrailColorPicker, &waveTrailColor);
-        updateColorPicker(layoutBGColorPicker, &layoutBGColor);
-        updateColorPicker(layoutG1ColorPicker, &layoutG1Color);
-        updateColorPicker(layoutG2ColorPicker, &layoutG2Color);
-        updateColorPicker(layoutMGColorPicker, &layoutMGColor);
-        updateColorPicker(layoutMG2ColorPicker, &layoutMG2Color);
-        updateColorPicker(layoutLineColorPicker, &layoutLineColor);
+        Toolbox::updateColorPicker(waveTrailColorPicker, &waveTrailColor);
+        Toolbox::updateColorPicker(layoutBGColorPicker, &layoutBGColor);
+        Toolbox::updateColorPicker(layoutG1ColorPicker, &layoutG1Color);
+        Toolbox::updateColorPicker(layoutG2ColorPicker, &layoutG2Color);
+        Toolbox::updateColorPicker(layoutMGColorPicker, &layoutMGColor);
+        Toolbox::updateColorPicker(layoutMG2ColorPicker, &layoutMG2Color);
+        Toolbox::updateColorPicker(layoutLineColorPicker, &layoutLineColor);
     };
 };
 Toolbox toolbox;
 $on_mod(Loaded) {
+    geode::utils::file::createDirectory(Mod::get()->getSaveDir()/"iconKits");
+    geode::utils::file::createDirectory(Mod::get()->getSaveDir()/"rogue");
+    geode::utils::file::createDirectory(Mod::get()->getSaveDir()/"rogue"/"macros");
+	listenForKeybindSettingPresses("kb-toggle", [](Keybind const& keybind, bool down, bool repeat, double dt) {
+		if (down&&!repeat) {
+            toolbox.currentFunny=toolbox.funnies[rand()%size(toolbox.funnies)];
+            toolbox.uiOpen=!toolbox.uiOpen;
+        };
+	});
     toolbox.load();
     ImGuiCocos::get().setup();
     ImGuiCocos::get().draw([]{
@@ -1076,20 +1096,20 @@ $on_mod(Loaded) {
             ImGui::Begin("Toolbox", &toolbox.uiOpen);
             if (ImGui::TreeNode("Toolbox Settings")) {
                 ImGui::PushItemWidth(200.f); 
-                ImGui::SliderFloat("Font Scale", &toolbox.fontScale, 0.f, 10.f, "%.2f");
+                ImGui::InputFloat("Font Scale", &toolbox.fontScale);
                 ImGui::SetItemTooltip("Scale of Toolbox's text elements.");
                 ImGui::PopItemWidth();
                 ImGui::Checkbox("Style Editor", &toolbox.styleEditor);
                 ImGui::SetItemTooltip("Opens the Style Editor.");
-                ImGui::Text("%s", std::format("Toolbox {}", toolbox.getMod()->getVersion().toVString(true)).c_str());
+                ImGui::Text("%s", std::format("Toolbox {}", Toolbox::getMod()->getVersion().toVString(true)).c_str());
                 ImGui::SetItemTooltip("%s", toolbox.currentFunny.c_str());
                 ImGui::TreePop();
             };
             if (ImGui::TreeNode("Universal")) {
                 ImGui::PushItemWidth(200.f); 
-                ImGui::SliderFloat("Music Volume", &toolbox.getAudioEngine()->m_musicVolume, 0.f, 1.f, "%.2f");
+                ImGui::InputFloat("Music Volume", &Toolbox::getAudioEngine()->m_musicVolume);
                 ImGui::SetItemTooltip("Equivalent to GD's music volume slider.");
-                ImGui::SliderFloat("SFX Volume", &toolbox.getAudioEngine()->m_sfxVolume, 0.f, 1.f, "%.2f");
+                ImGui::InputFloat("SFX Volume", &Toolbox::getAudioEngine()->m_sfxVolume);
                 ImGui::SetItemTooltip("Equivalent to GD's SFX volume slider.");
                 ImGui::PopItemWidth();
                 ImGui::InputFloat("##speedhack", &toolbox.speedhack);
@@ -1104,7 +1124,7 @@ $on_mod(Loaded) {
                 if (ImGui::TreeNode("Auto Kill")) {
                     ImGui::Checkbox("Enabled", &toolbox.autoKill);
                     ImGui::SetItemTooltip("Enables Auto Kill.");
-                    ImGui::SliderFloat("Percentage", &toolbox.autoKillPercentage, 0.f, 100.f);
+                    ImGui::InputFloat("Percentage", &toolbox.autoKillPercentage);
                     ImGui::SetItemTooltip("Percentage at which to automatically kill the player.");
                     ImGui::TreePop();
                 };
@@ -1117,7 +1137,7 @@ $on_mod(Loaded) {
                     if (ImGui::ColorEdit3("##waveTrailColorPicker", toolbox.waveTrailColorPicker, ImGuiColorEditFlags_Uint8)) toolbox.colorPickerChange();
                     ImGui::SameLine();
                     ImGui::Checkbox("Wave Trail Color", &toolbox.useWaveTrailColor);
-                    ImGui::SliderFloat("Wave Trail Size", &toolbox.waveTrailSize, 0.f, 10.f, "%.2f");
+                    ImGui::InputFloat("Wave Trail Size", &toolbox.waveTrailSize);
                     ImGui::SetItemTooltip("Multiplier for the wave trail's size.");
                     ImGui::PopItemWidth();
                     ImGui::TreePop();
@@ -1181,6 +1201,7 @@ $on_mod(Loaded) {
                 ImGui::Checkbox("Noclip", &toolbox.noclip);
                 ImGui::SetItemTooltip("Prevents the player from dying.");
                 ImGui::Checkbox("No Checkpoint Delay", &toolbox.noCheckpointDelay);
+                ImGui::SetItemTooltip("Removes the frame of delay before checkpoint placement.");
                 ImGui::Checkbox("No Respawn Flash", &toolbox.noRespawnFlash);
                 ImGui::SetItemTooltip("Disables the flash effect upon respawn.");
                 ImGui::TreePop();
@@ -1225,14 +1246,18 @@ $on_mod(Loaded) {
             };
             if (ImGui::TreeNode("Creator")) {
                 ImGui::Checkbox("Individual Rotate", &toolbox.individualRotate);
+                ImGui::SetItemTooltip("Rotates objects individually when attempting to rotate a selection.");
+                ImGui::Checkbox("Verify Hack", &toolbox.verifyHack);
+                ImGui::SetItemTooltip("Allows unverified levels to be uploaded.");
                 if (ImGui::Button("Shuffle Object Positions")&&EditorUI::get()!=nullptr&&EditorUI::get()->m_selectedObjects->count()>1) {
                     int count=EditorUI::get()->m_selectedObjects->count();
                     std::vector<cocos2d::CCPoint> positions;
-                    std::vector<GameObject*> selectedObjects=toolbox.objectVec(EditorUI::get()->m_selectedObjects);
+                    std::vector<GameObject*> selectedObjects=Toolbox::objectVec(EditorUI::get()->m_selectedObjects);
                     for (int i=0; i<count; ++i) positions.push_back(selectedObjects[i]->getUnmodifiedPosition());
                     std::ranges::shuffle(positions, std::default_random_engine{});
                     for (int i=0; i<count; ++i) selectedObjects[i]->setPosition(positions[i]);
                 };
+                ImGui::SetItemTooltip("Shuffles the positions of all selected objects.");
                 ImGui::TreePop();
             };
             if (ImGui::TreeNode("Rogue")) {
@@ -1425,7 +1450,7 @@ class $modify(cocos2d::CCScheduler) {
 class $modify(EditorUI) {
     void rotateObjects(CCArray* objects, float rotation, CCPoint pivotPoint) {
         if (toolbox.individualRotate) {
-            for (auto& obj:toolbox.objectVec(EditorUI::get()->m_selectedObjects)) if (obj->canRotateFree()||!std::fmod(rotation, 90.f)) obj->addRotation(rotation);
+            for (auto& obj:Toolbox::objectVec(EditorUI::get()->m_selectedObjects)) if (obj->canRotateFree()||!std::fmod(rotation, 90.f)) obj->addRotation(rotation);
             return;
         };
         EditorUI::rotateObjects(objects, rotation, pivotPoint);
@@ -1455,14 +1480,10 @@ class $modify(PlayLayer) {
         PlayLayer::destroyPlayer(player, object);
     };
 };
-$execute {
-    geode::utils::file::createDirectory(Mod::get()->getSaveDir()/"iconKits");
-    geode::utils::file::createDirectory(Mod::get()->getSaveDir()/"rogue");
-    geode::utils::file::createDirectory(Mod::get()->getSaveDir()/"rogue"/"macros");
-	listenForKeybindSettingPresses("kb-toggle", [](Keybind const& keybind, bool down, bool repeat, double dt) {
-		if (down&&!repeat) {
-            toolbox.currentFunny=toolbox.funnies[rand()%size(toolbox.funnies)];
-            toolbox.uiOpen=!toolbox.uiOpen;
-        };
-	});
+class $modify(GJGameLevel) {
+    bool init() {
+        bool ret=GJGameLevel::init();
+        if (toolbox.verifyHack) m_isVerifiedRaw=true;
+        return ret;
+    };
 };
