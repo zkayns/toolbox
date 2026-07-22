@@ -2,6 +2,7 @@
 // .TBG = ToolBox Garage
 #include <Geode/Geode.hpp>
 #include <Geode/utils/cocos.hpp>
+#include <Geode/utils/base64.hpp>
 #include <Geode/modify/LevelInfoLayer.hpp>
 #include <Geode/modify/GameManager.hpp>
 #include <Geode/modify/GameObject.hpp>
@@ -12,8 +13,12 @@
 #include <Geode/modify/EditorUI.hpp>
 #include <Geode/modify/UILayer.hpp>
 #include <Geode/modify/GJGameLevel.hpp>
+#include <Geode/modify/SetGroupIDLayer.hpp>
+#include <Geode/modify/EditorPauseLayer.hpp>
 #include <imgui-cocos.hpp>
+#include <misc/cpp/imgui_stdlib.h>
 #include "../include/slc/slc.hpp"
+#include <razoom.save_level_data_api/include/SaveLevelDataApi.hpp>
 using namespace geode::prelude;
 struct Shared {
     static uint64_t getTick() {
@@ -893,6 +898,7 @@ struct Toolbox {
     cocos2d::ccColor3B layoutBGColor;
     float layoutBGColorPicker[3];
     bool verifyHack;
+    bool useGroupNames;
     bool isCheating() {
         return (
             noclip||
@@ -987,6 +993,7 @@ struct Toolbox {
         layoutMG2Color=Toolbox::getMod()->getSavedValue<cocos2d::ccColor3B>("layoutMG2Color", cocos2d::ccColor3B{40, 125, 255});
         Toolbox::loadColorPicker(&layoutMG2Color, layoutMG2ColorPicker);
         verifyHack=Toolbox::getMod()->getSavedValue<bool>("verifyHack", false);
+        useGroupNames=Toolbox::getMod()->getSavedValue<bool>("useGroupNames", false);
     };
     void save() {
         Toolbox::getMod()->setSavedValue<bool>("autoKill", autoKill);
@@ -1017,6 +1024,7 @@ struct Toolbox {
         Toolbox::getMod()->setSavedValue<cocos2d::ccColor3B>("layoutMGColor", layoutMGColor);
         Toolbox::getMod()->setSavedValue<cocos2d::ccColor3B>("layoutMG2Color", layoutMG2Color);
         Toolbox::getMod()->setSavedValue<bool>("verifyHack", verifyHack);
+        Toolbox::getMod()->setSavedValue<bool>("useGroupNames", useGroupNames);
     };
     static std::vector<GameObject*> objectVec(cocos2d::CCArray* source) {
         auto ext=CCArrayExt<GameObject*>(source);
@@ -1045,6 +1053,274 @@ struct Toolbox {
     };
 };
 Toolbox toolbox;
+class $modify(UILayer) {
+    void onCheck(CCObject* sender) {
+        UILayer::onCheck(sender);
+        if ((rogue.state==1||toolbox.noCheckpointDelay)&&PlayLayer::get()!=nullptr) {
+            PlayLayer::get()->m_tryPlaceCheckpoint=false;
+            PlayLayer::get()->markCheckpoint();
+        };
+    };
+};
+class $modify(LevelInfoLayer) {
+    bool init(GJGameLevel* level, bool challenge) {
+        toolbox.lastLevel=level;
+        return LevelInfoLayer::init(level, challenge);
+    };
+};
+class $modify(GameObject) {
+    void addGlow(gd::string frame) {
+        if (toolbox.showLayout&&PlayLayer::get()!=nullptr) m_isHide=(Toolbox::isDecoration(this));
+    };
+    void setOpacity(unsigned char opacity) {
+        if (toolbox.showLayout&&PlayLayer::get()!=nullptr) {
+            GameObject::setOpacity((Toolbox::isDecoration(this))?0:255);
+            return;
+        };
+        GameObject::setOpacity(opacity);
+    };
+    void setVisible(bool visible) {
+        if (toolbox.showLayout&&PlayLayer::get()!=nullptr) {
+            GameObject::setVisible(!Toolbox::isDecoration(this));
+            return;
+        };
+        GameObject::setVisible(visible);
+    };
+    CCRect getObjectRect(float width, float height) {
+        CCRect ret=GameObject::getObjectRect(width, height);
+        if (toolbox.noCollide) ret.size.setSize(0, 0);
+        return ret;
+    };
+};
+class $modify(GameManager) {
+    bool isIconUnlocked(int id, IconType type) {
+        if (toolbox.iconHack) return true;
+        return GameManager::isIconUnlocked(id, type);
+    };
+    bool isColorUnlocked(int id, UnlockType type) {
+        if (toolbox.iconHack) return true;
+        return GameManager::isColorUnlocked(id, type);
+    };
+};
+class $modify(ToolboxBaseGame, GJBaseGameLayer) {
+    struct Fields {
+        bool m_isMGInput;
+    };
+    void handleButton(bool down, int button, bool isPlayer1) {
+        if (PlayLayer::get()!=nullptr&&!m_fields->m_isMGInput&&toolbox.maintainGravity&&static_cast<PlayerButton>(button)==PlayerButton::Jump) {
+            if (isPlayer1&&m_player1->m_isUpsideDown) {
+                m_fields->m_isMGInput=true;
+                GJBaseGameLayer::handleButton(!down, button, true);
+                m_fields->m_isMGInput=false;
+                return;
+            } else if (!isPlayer1&&m_player2->m_isUpsideDown) {
+                m_fields->m_isMGInput=true;
+                GJBaseGameLayer::handleButton(!down, button, false);
+                m_fields->m_isMGInput=false;
+                return;   
+            };
+        };
+        GJBaseGameLayer::handleButton(down, button, isPlayer1);
+    };
+    void updateColor(ccColor3B& color, float fadeTime, int colorID, bool blending, float opacity, ccHSVValue& copyHSV, int colorIDToCopy, bool copyOpacity, EffectGameObject* callerObject, int unk1, int unk2) {
+        if (toolbox.showLayout&&PlayLayer::get()!=nullptr) {
+            switch (colorID) {
+                case 1000: {
+                    GJBaseGameLayer::updateColor(toolbox.layoutBGColor, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
+                    return;
+                };
+                case 1001: {
+                    GJBaseGameLayer::updateColor(toolbox.layoutG1Color, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
+                    return;
+                };
+                case 1002: {
+                    GJBaseGameLayer::updateColor(toolbox.layoutLineColor, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
+                    return;
+                };
+                case 1009: {
+                    GJBaseGameLayer::updateColor(toolbox.layoutG2Color, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
+                    return;
+                };
+                case 1013: {
+                    GJBaseGameLayer::updateColor(toolbox.layoutMGColor, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
+                    return;
+                };
+                case 1014: {
+                    GJBaseGameLayer::updateColor(toolbox.layoutMG2Color, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
+                    return;
+                };
+            };  
+        };
+        GJBaseGameLayer::updateColor(color, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
+    };
+    void resetPlayer() {
+        toolbox.oneTimeCheatThisAttempt=false;
+        GJBaseGameLayer::resetPlayer();
+    };
+    void update(float dt) {
+        if (Shared::getTick()<1) toolbox.oneTimeCheatThisAttempt=false;
+        toolbox.lastLevel=this->m_level;
+        if (toolbox.autoKill&&!this->m_level->isPlatformer()&&PlayLayer::get()->getCurrentPercent()>=toolbox.autoKillPercentage) PlayLayer::get()->resetLevelFromStart();
+        GJBaseGameLayer::update(dt);
+    };
+};
+class $modify(ToolboxPlayer, PlayerObject) {
+    struct Fields {
+        bool m_jumpIsDown;
+    };
+    bool pushButton(PlayerButton button) {
+        if (!PlayerObject::pushButton(button)) return false;
+        if (button==PlayerButton::Jump) m_fields->m_jumpIsDown=true;
+        return true;
+    };
+    bool releaseButton(PlayerButton button) {
+        if (!PlayerObject::releaseButton(button)) return false;
+        if (button==PlayerButton::Jump) m_fields->m_jumpIsDown=false;
+        return true;
+    };
+    void flipGravity(bool flip, bool noEffects) {
+        if (toolbox.maintainGravity) {
+            if (m_fields->m_jumpIsDown) {
+                static_cast<ToolboxBaseGame*>(GJBaseGameLayer::get())->m_fields->m_isMGInput=true;
+                GJBaseGameLayer::get()->handleButton(false, static_cast<int>(PlayerButton::Jump), isPlayer1());
+                static_cast<ToolboxBaseGame*>(GJBaseGameLayer::get())->m_fields->m_isMGInput=false;
+            } else {
+                static_cast<ToolboxBaseGame*>(GJBaseGameLayer::get())->m_fields->m_isMGInput=true;
+                GJBaseGameLayer::get()->handleButton(true, static_cast<int>(PlayerButton::Jump), isPlayer1());
+                static_cast<ToolboxBaseGame*>(GJBaseGameLayer::get())->m_fields->m_isMGInput=false;
+            };
+        };
+        PlayerObject::flipGravity(flip, noEffects);
+    };
+	void update(float dt) {
+		PlayerObject::update(dt);
+        if (toolbox.customWaveTrail) {
+		    if (toolbox.noWaveTrail) m_waveTrail->reset();
+            if (toolbox.useWaveTrailColor) m_waveTrail->setColor(toolbox.waveTrailColor);
+		    m_waveTrail->m_waveSize=toolbox.waveTrailSize*m_vehicleSize;
+        };
+	};
+	void playSpawnEffect() {
+        if (toolbox.noRespawnFlash) return;
+        PlayerObject::playSpawnEffect();
+	};
+};
+class $modify(cocos2d::CCScheduler) {
+    void update(float dt) {
+        if (toolbox.speedhackEnabled) {
+            CCScheduler::update(dt*toolbox.speedhack);
+            return;
+        };
+        CCScheduler::update(dt);
+    };
+};
+class $modify(ToolboxEditorUI, EditorUI) {
+    struct Fields {
+        std::unordered_map<uint16_t, std::string> m_groupNames;
+    };
+    void rotateObjects(CCArray* objects, float rotation, CCPoint pivotPoint) {
+        if (toolbox.individualRotate) {
+            for (auto& obj:Toolbox::objectVec(EditorUI::get()->m_selectedObjects)) if (obj->canRotateFree()||!std::fmod(rotation, 90.f)) obj->addRotation(rotation);
+            return;
+        };
+        EditorUI::rotateObjects(objects, rotation, pivotPoint);
+    };
+    bool init(LevelEditorLayer* editorLayer) {
+        if (!EditorUI::init(editorLayer)) return false;
+        ToolboxEditorUI::loadGroupNames(SaveLevelDataAPI::getSavedValue(editorLayer->m_level, "groupNames", false, true).unwrapOrDefault().asString().unwrapOr(""));
+        return true;
+    };
+    void loadGroupNames(std::string_view raw) {
+        m_fields->m_groupNames.clear();
+        if (raw=="") return;
+        auto split=geode::utils::string::splitView(raw, "|");
+        std::vector<std::string_view> pairStrings(split.begin(), split.end());
+        for (const auto& pairString:pairStrings) {
+            auto pairSplit=geode::utils::string::splitView(pairString, "`");
+            std::vector<std::string_view> pair(pairSplit.begin(), pairSplit.end());
+            auto decodedName=geode::utils::base64::decodeString(pair[1], geode::utils::base64::Base64Variant::Normal);
+            if (!decodedName.ok().has_value()) continue;
+            m_fields->m_groupNames.emplace(std::stoi(std::string(pair[0])), decodedName.ok().value());
+        };
+    };
+    void saveGroupNames() {
+        if (!m_fields->m_groupNames.size()) return;
+        std::string res;
+        for (const auto& pair:m_fields->m_groupNames) {
+            res+=std::to_string(pair.first);
+            res+="`";
+            res+=geode::utils::base64::encode(pair.second, geode::utils::base64::Base64Variant::Normal);
+            res+="|";
+        };
+        res.pop_back();
+        SaveLevelDataAPI::setSavedValue(LevelEditorLayer::get()->m_level, "groupNames", res, false, true);
+    };
+};
+class $modify(EditorPauseLayer) {
+    void saveLevel() {
+        static_cast<ToolboxEditorUI*>(EditorUI::get())->saveGroupNames();      
+        EditorPauseLayer::saveLevel();
+    };
+};
+class $modify(SetGroupIDLayer) {
+    bool init(GameObject* obj, CCArray* objs) {
+        if (!SetGroupIDLayer::init(obj, objs)) return false;
+        updateGroupIDButtons();
+        return true;
+    };
+    void updateGroupIDButtons() {
+        SetGroupIDLayer::updateGroupIDButtons();
+        if (!toolbox.useGroupNames||EditorUI::get()==nullptr) return;
+        auto list=this->getChildByIDRecursive("groups-list-menu");
+        if (list==nullptr) return;
+        auto& groupNames=static_cast<ToolboxEditorUI*>(EditorUI::get())->m_fields->m_groupNames;
+        auto children=list->getChildren();
+        uint16_t i=0;
+        while (++i<children->count()) {
+            auto o=static_cast<CCMenuItemSpriteExtra*>(children->objectAtIndex(i));
+            if (o->getTag()<1) continue;
+            auto font=o->getChildByTag(1)->getChildByType<CCLabelBMFont*>(0);
+            if (font==nullptr) continue;
+            if (groupNames.contains(o->getTag())) {
+                font->setString(std::format("{} ({})", groupNames.at(o->getTag()), o->getTag()).c_str(), true);
+                font->createFontChars();
+                font->updateLabel();
+            };
+        };
+    };
+};
+class $modify(PlayLayer) {
+    void addObject(GameObject* object) {
+        if (toolbox.noObjectGlow) object->m_hasNoGlow=true;
+        if (toolbox.showLayout) {
+            if (Toolbox::isCosmetic(object)) return;
+            object->m_activeMainColorID=-1;
+            object->m_activeDetailColorID=-1;
+            object->m_shouldBlendBase=false;
+            object->m_shouldBlendDetail=false;
+            object->m_baseUsesHSV=false;
+            object->m_detailUsesHSV=false;
+            if (!Toolbox::isDecoration(object)&&!object->isTrigger()) {
+                object->m_isHide=false;
+                object->m_hasNoGlow=true;
+                object->setVisible(true);
+                object->setOpacity(255);
+            } else object->m_isHide=true;
+        };
+        PlayLayer::addObject(object);
+    };
+    void destroyPlayer(PlayerObject* player, GameObject* object) {
+        if (toolbox.noclip) return;
+        PlayLayer::destroyPlayer(player, object);
+    };
+};
+class $modify(GJGameLevel) {
+    bool init() {
+        bool ret=GJGameLevel::init();
+        if (toolbox.verifyHack) m_isVerifiedRaw=true;
+        return ret;
+    };
+};
 $on_mod(Loaded) {
     geode::utils::file::createDirectory(Mod::get()->getSaveDir()/"iconKits");
     geode::utils::file::createDirectory(Mod::get()->getSaveDir()/"rogue");
@@ -1213,6 +1489,33 @@ $on_mod(Loaded) {
                 ImGui::TreePop();
             };
             if (ImGui::TreeNode("Creator")) {
+                if (ImGui::TreeNode("Group Names")) {
+                    ImGui::Checkbox("Enabled", &toolbox.useGroupNames);
+                    if (EditorUI::get()==nullptr) ImGui::Text("No level open");
+                    else {
+                        uint16_t i=0;
+                        auto& groupNames=static_cast<ToolboxEditorUI*>(EditorUI::get())->m_fields->m_groupNames;
+                        ImGui::PushItemWidth(300.f); 
+                        for (auto& pair:groupNames) {
+                            auto first=pair.first;
+                            ImGui::PushItemWidth(100.f);
+                            if (ImGui::InputScalar(std::format("##EditorNamedGroupID{}", i).c_str(), ImGuiDataType_U16, &first)) {
+                                auto e=groupNames.extract(pair.first);
+                                e.key()=first;
+                                groupNames.insert(std::move(e));
+                            };
+                            ImGui::PopItemWidth();
+                            ImGui::SameLine();
+                            ImGui::InputText(std::format("##EditorNamedGroupText{}", i).c_str(), &pair.second);
+                            ImGui::SameLine();
+                            if (ImGui::Button(std::format("X##EditorNamedGroupXButton{}", i).c_str())) groupNames.erase(pair.first);
+                            i++;
+                        };
+                        ImGui::PopItemWidth();
+                        if (ImGui::Button("New")) groupNames.emplace(0, ""); 
+                    };
+                    ImGui::TreePop();
+                };
                 ImGui::Checkbox("Individual Rotate", &toolbox.individualRotate);
                 ImGui::SetItemTooltip("Rotates objects individually when attempting to rotate a selection.");
                 ImGui::Checkbox("Verify Hack", &toolbox.verifyHack);
@@ -1259,199 +1562,4 @@ $on_mod(Loaded) {
         };
         toolbox.save();
     });
-};
-class $modify(UILayer) {
-    void onCheck(CCObject* sender) {
-        UILayer::onCheck(sender);
-        if ((rogue.state==1||toolbox.noCheckpointDelay)&&PlayLayer::get()!=nullptr) {
-            PlayLayer::get()->m_tryPlaceCheckpoint=false;
-            PlayLayer::get()->markCheckpoint();
-        };
-    };
-};
-class $modify(LevelInfoLayer) {
-    bool init(GJGameLevel* level, bool challenge) {
-        toolbox.lastLevel=level;
-        return LevelInfoLayer::init(level, challenge);
-    };
-};
-class $modify(GameObject) {
-    void addGlow(gd::string frame) {
-        if (!toolbox.noObjectGlow) GameObject::addGlow(frame);
-        if (toolbox.showLayout&&PlayLayer::get()!=nullptr) m_isHide=(Toolbox::isDecoration(this));
-    };
-    void setOpacity(unsigned char opacity) {
-        if (toolbox.showLayout&&PlayLayer::get()!=nullptr) {
-            GameObject::setOpacity((Toolbox::isDecoration(this))?0:255);
-            return;
-        };
-        GameObject::setOpacity(opacity);
-    };
-    void setVisible(bool visible) {
-        if (toolbox.showLayout&&PlayLayer::get()!=nullptr) {
-            GameObject::setVisible(!Toolbox::isDecoration(this));
-            return;
-        };
-        GameObject::setVisible(visible);
-    };
-    CCRect getObjectRect(float width, float height) {
-        CCRect ret=GameObject::getObjectRect(width, height);
-        if (toolbox.noCollide) ret.size.setSize(0, 0);
-        return ret;
-    };
-};
-class $modify(ToolboxPlayer, PlayerObject) {
-    struct Fields {
-        bool m_isMGInput;
-        bool m_jumpIsDown;
-    };
-    bool pushButton(PlayerButton button) {
-        if (Shared::getTick()&&!m_fields->m_isMGInput&&toolbox.maintainGravity&&button==PlayerButton::Jump&&m_isUpsideDown) {
-            m_fields->m_isMGInput=true;
-            bool ret=!PlayerObject::releaseButton(button);
-            m_fields->m_isMGInput=false;
-            return ret;
-        };
-        m_fields->m_jumpIsDown=true;
-        return PlayerObject::pushButton(button);
-    };
-    bool releaseButton(PlayerButton button) {
-        if (Shared::getTick()&&!m_fields->m_isMGInput&&toolbox.maintainGravity&&button==PlayerButton::Jump&&m_isUpsideDown) {
-            m_fields->m_isMGInput=true;
-            bool ret=!PlayerObject::pushButton(button);
-            m_fields->m_isMGInput=false;
-            return ret;
-        };
-        m_fields->m_jumpIsDown=false;
-        return PlayerObject::releaseButton(button);
-    };
-    void flipGravity(bool flip, bool noEffects) {
-        if (toolbox.maintainGravity) {
-            if (m_fields->m_jumpIsDown) {
-                m_fields->m_isMGInput=true;
-                PlayerObject::releaseButton(PlayerButton::Jump);
-                m_fields->m_isMGInput=false;
-            } else {
-                m_fields->m_isMGInput=true;
-                PlayerObject::pushButton(PlayerButton::Jump);
-                m_fields->m_isMGInput=false;
-            };
-        };
-        PlayerObject::flipGravity(flip, noEffects);
-    };
-	void update(float dt) {
-		PlayerObject::update(dt);
-        if (toolbox.customWaveTrail) {
-		    if (toolbox.noWaveTrail) m_waveTrail->reset();
-            if (toolbox.useWaveTrailColor) m_waveTrail->setColor(toolbox.waveTrailColor);
-		    m_waveTrail->m_waveSize=toolbox.waveTrailSize*m_vehicleSize;
-        };
-	};
-	void playSpawnEffect() {
-        if (toolbox.noRespawnFlash) return;
-        PlayerObject::playSpawnEffect();
-	};
-};
-class $modify(GameManager) {
-    bool isIconUnlocked(int id, IconType type) {
-        if (toolbox.iconHack) return true;
-        return GameManager::isIconUnlocked(id, type);
-    };
-    bool isColorUnlocked(int id, UnlockType type) {
-        if (toolbox.iconHack) return true;
-        return GameManager::isColorUnlocked(id, type);
-    };
-};
-class $modify(GJBaseGameLayer) {
-    void updateColor(ccColor3B& color, float fadeTime, int colorID, bool blending, float opacity, ccHSVValue& copyHSV, int colorIDToCopy, bool copyOpacity, EffectGameObject* callerObject, int unk1, int unk2) {
-        if (toolbox.showLayout) {
-            switch (colorID) {
-                case 1000: {
-                    GJBaseGameLayer::updateColor(toolbox.layoutBGColor, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
-                    return;
-                };
-                case 1001: {
-                    GJBaseGameLayer::updateColor(toolbox.layoutG1Color, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
-                    return;
-                };
-                case 1002: {
-                    GJBaseGameLayer::updateColor(toolbox.layoutLineColor, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
-                    return;
-                };
-                case 1009: {
-                    GJBaseGameLayer::updateColor(toolbox.layoutG2Color, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
-                    return;
-                };
-                case 1013: {
-                    GJBaseGameLayer::updateColor(toolbox.layoutMGColor, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
-                    return;
-                };
-                case 1014: {
-                    GJBaseGameLayer::updateColor(toolbox.layoutMG2Color, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
-                    return;
-                };
-            };
-            
-        }
-        GJBaseGameLayer::updateColor(color, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
-    }
-    void resetPlayer() {
-        toolbox.oneTimeCheatThisAttempt=false;
-        GJBaseGameLayer::resetPlayer();
-    };
-    void update(float dt) {
-        if (Shared::getTick()<1) toolbox.oneTimeCheatThisAttempt=false;
-        toolbox.lastLevel=this->m_level;
-        if (toolbox.autoKill&&!this->m_level->isPlatformer()&&PlayLayer::get()->getCurrentPercent()>=toolbox.autoKillPercentage) PlayLayer::get()->resetLevelFromStart();
-        GJBaseGameLayer::update(dt);
-    };
-};
-class $modify(cocos2d::CCScheduler) {
-    void update(float dt) {
-        if (toolbox.speedhackEnabled) {
-            CCScheduler::update(dt*toolbox.speedhack);
-            return;
-        };
-        CCScheduler::update(dt);
-    };
-};
-class $modify(EditorUI) {
-    void rotateObjects(CCArray* objects, float rotation, CCPoint pivotPoint) {
-        if (toolbox.individualRotate) {
-            for (auto& obj:Toolbox::objectVec(EditorUI::get()->m_selectedObjects)) if (obj->canRotateFree()||!std::fmod(rotation, 90.f)) obj->addRotation(rotation);
-            return;
-        };
-        EditorUI::rotateObjects(objects, rotation, pivotPoint);
-    };
-};
-class $modify(PlayLayer) {
-    void addObject(GameObject* object) {
-        if (toolbox.showLayout) {
-            if (Toolbox::isCosmetic(object)) return;
-            object->m_activeMainColorID=-1;
-            object->m_activeDetailColorID=-1;
-            object->m_shouldBlendBase=false;
-            object->m_shouldBlendDetail=false;
-            object->m_baseUsesHSV=false;
-            object->m_detailUsesHSV=false;
-            if (!Toolbox::isDecoration(object)&&!object->isTrigger()) {
-                object->m_isHide=false;
-                object->m_hasNoGlow=true;
-                object->setVisible(true);
-                object->setOpacity(255);
-            } else object->m_isHide=true;
-        };
-        PlayLayer::addObject(object);
-    };
-    void destroyPlayer(PlayerObject* player, GameObject* object) {
-        if (toolbox.noclip) return;
-        PlayLayer::destroyPlayer(player, object);
-    };
-};
-class $modify(GJGameLevel) {
-    bool init() {
-        bool ret=GJGameLevel::init();
-        if (toolbox.verifyHack) m_isVerifiedRaw=true;
-        return ret;
-    };
 };

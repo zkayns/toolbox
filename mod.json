@@ -10,7 +10,8 @@
 	"developer": "ZProject",
 	"description": "",
 	"dependencies": {
-		"geode.node-ids": ">=v1.23.3"
+		"geode.node-ids": ">=v1.23.3",
+		"razoom.save_level_data_api": ">=v1.0.5"
 	},
 	"links": {
 		"source": "https://github.com/zkayns/toolbox"
